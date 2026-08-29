@@ -1,0 +1,39 @@
+# CrowdWise backend dependencies.
+# Versions below are the ones the test suite actually runs against.
+
+# --- Web framework ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32
+
+# --- Data layer ---
+SQLAlchemy==2.0.52
+alembic==1.19.1
+# PostgreSQL driver. The SQLite dev/test fallback needs no driver.
+psycopg[binary]==3.2.12
+
+# --- Validation and settings ---
+pydantic==2.13.5
+pydantic-settings==2.15.0
+email-validator==2.3.0
+
+# --- Security ---
+bcrypt==5.0.0
+PyJWT==2.13.0
+
+# --- Integrations ---
+httpx==0.28.1          # Gemma / OpenAI-compatible endpoints
+razorpay==2.0.1        # payments
+web3==7.16.0           # EVM anchoring
+qrcode[pil]==8.2       # campaign QR codes
+
+# --- Utilities ---
+python-slugify==8.0.4
+structlog==26.1.0
+
+# --- Optional, activated by provider switches ---
+# SENTIMENT_PROVIDER=xlm-roberta needs these (lazy-imported):
+#   transformers>=4.44
+#   torch>=2.4
+# STORAGE_PROVIDER=s3 needs this (lazy-imported):
+#   boto3>=1.35

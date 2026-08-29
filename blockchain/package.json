@@ -1,0 +1,24 @@
+{
+  "name": "crowdwise-blockchain",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CrowdWise on-chain audit registry (Solidity + Hardhat)",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
+    "deploy:testnet": "hardhat run scripts/deploy.ts --network testnet",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.17",
+    "typescript": "^5.6.3",
+    "ts-node": "^10.9.2",
+    "@types/node": "^22.9.0",
+    "@types/mocha": "^10.0.9",
+    "chai": "^4.5.0",
+    "dotenv": "^16.4.5"
+  }
+}

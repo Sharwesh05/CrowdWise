@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * {
+    @apply border-surface-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-surface-subtle text-ink antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Visible focus for every interactive element — keyboard users get the same
+     affordances as pointer users. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-surface;
+  }
+
+  h1, h2, h3, h4 {
+    @apply text-ink font-semibold tracking-tight;
+  }
+
+  /* Respect a user's reduced-motion preference rather than overriding it. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply container mx-auto max-w-7xl;
+  }
+
+  .card {
+    @apply rounded-xl border border-surface-border bg-surface shadow-card;
+  }
+
+  .card-hover {
+    @apply transition-shadow duration-200 hover:shadow-lift;
+  }
+
+  .label-text {
+    @apply text-sm font-medium text-ink-soft;
+  }
+
+  .hint-text {
+    @apply text-xs text-ink-muted;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold tracking-tight text-ink tabular-nums;
+  }
+
+  .stat-label {
+    @apply text-xs font-medium uppercase tracking-wide text-ink-faint;
+  }
+
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-surface-muted;
+  }
+
+  .skeleton::after {
+    content: "";
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent;
+  }
+
+  .prose-campaign p {
+    @apply mb-4 leading-relaxed text-ink-soft;
+  }
+
+  .prose-campaign p:last-child {
+    @apply mb-0;
+  }
+}
+
+/* Print-friendly QR page: only the QR card survives a print. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    @apply bg-white;
+  }
+  .print-card {
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+}
