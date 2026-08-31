@@ -135,7 +135,8 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        "h-10 w-full rounded-lg border border-surface-border bg-surface px-3 text-sm text-ink",
+        "h-11 w-full rounded-lg border border-surface-border bg-surface px-3 text-base text-ink",
+        "sm:h-10 sm:text-sm",
         "placeholder:text-ink-faint",
         "disabled:cursor-not-allowed disabled:bg-surface-muted",
         "aria-[invalid=true]:border-critical",
@@ -154,7 +155,7 @@ export const Textarea = React.forwardRef<
   <textarea
     ref={ref}
     className={cn(
-      "w-full rounded-lg border border-surface-border bg-surface p-3 text-sm text-ink",
+      "w-full rounded-lg border border-surface-border bg-surface p-3 text-base text-ink sm:text-sm",
       "placeholder:text-ink-faint",
       "aria-[invalid=true]:border-critical",
       className,
@@ -172,7 +173,8 @@ export const Select = React.forwardRef<
     <select
       ref={ref}
       className={cn(
-        "h-10 w-full appearance-none rounded-lg border border-surface-border bg-surface px-3 pr-9 text-sm text-ink",
+        "h-11 w-full appearance-none rounded-lg border border-surface-border bg-surface px-3 pr-9 text-base text-ink",
+        "sm:h-10 sm:text-sm",
         className,
       )}
       {...props}
@@ -414,6 +416,10 @@ export function Dialog({
       aria-labelledby="dialog-title"
       className={cn(
         "w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface p-0 shadow-popover",
+        // A tall dialog on a phone must scroll inside itself rather than run off
+        // the bottom of the viewport. `dvh` keeps it correct while mobile
+        // browser chrome slides in and out.
+        "max-h-[calc(100dvh-2rem)] overflow-hidden",
         "backdrop:bg-ink/40 backdrop:backdrop-blur-sm",
         widths[size],
       )}
@@ -422,24 +428,33 @@ export function Dialog({
         if (event.target === ref.current) onClose();
       }}
     >
-      <div className="flex items-start justify-between gap-4 border-b border-surface-border p-5">
-        <div>
-          <h2 id="dialog-title" className="text-base font-semibold text-ink">
-            {title}
-          </h2>
-          {description && <p className="mt-1 text-sm text-ink-muted">{description}</p>}
+      {/* Header and footer stay put; only the body scrolls. */}
+      <div className="flex max-h-[calc(100dvh-2rem)] flex-col">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-surface-border p-5">
+          <div className="min-w-0">
+            <h2 id="dialog-title" className="text-base font-semibold text-ink">
+              {title}
+            </h2>
+            {description && <p className="mt-1 text-sm text-ink-muted">{description}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close dialog"
+            className="-m-1 shrink-0 rounded-md p-2 text-ink-faint transition-colors hover:bg-surface-muted hover:text-ink"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close dialog"
-          className="rounded-md p-1 text-ink-faint transition-colors hover:bg-surface-muted hover:text-ink"
-        >
-          <X className="h-4 w-4" aria-hidden />
-        </button>
+        <div className="flex-1 overflow-y-auto overscroll-contain p-5">{children}</div>
+        {footer && (
+          // Stacked on a phone (primary action on top, thumb-reachable), inline
+          // from sm up.
+          <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-surface-border p-5 sm:flex-row sm:justify-end sm:gap-3">
+            {footer}
+          </div>
+        )}
       </div>
-      <div className="p-5">{children}</div>
-      {footer && <div className="flex justify-end gap-3 border-t border-surface-border p-5">{footer}</div>}
     </dialog>
   );
 }
@@ -459,7 +474,10 @@ export function Tabs({
   className?: string;
 }) {
   return (
-    <div role="tablist" className={cn("flex gap-1 overflow-x-auto border-b border-surface-border", className)}>
+    <div
+      role="tablist"
+      className={cn("no-scrollbar flex gap-1 overflow-x-auto border-b border-surface-border", className)}
+    >
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -643,7 +661,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div
         aria-live="polite"
         aria-atomic="true"
-        className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-full max-w-sm flex-col gap-2"
+        className="pointer-events-none fixed inset-x-4 bottom-4 z-50 flex flex-col gap-2 sm:left-auto sm:right-4 sm:w-full sm:max-w-sm"
       >
         {messages.map((message) => (
           <div

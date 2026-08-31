@@ -317,13 +317,18 @@ function NewCampaignForm() {
             </CardContent>
           </Card>
 
-          <div className="flex justify-end gap-3">
-            <Link href="/creator/dashboard">
-              <Button type="button" variant="ghost">
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <Link href="/creator/dashboard" className="w-full sm:w-auto">
+              <Button type="button" variant="ghost" className="w-full sm:w-auto">
                 Cancel
               </Button>
             </Link>
-            <Button type="submit" loading={create.isPending} disabled={!valid}>
+            <Button
+              type="submit"
+              loading={create.isPending}
+              disabled={!valid}
+              className="w-full sm:w-auto"
+            >
               Create draft campaign
             </Button>
           </div>

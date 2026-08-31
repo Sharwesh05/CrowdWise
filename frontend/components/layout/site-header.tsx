@@ -82,7 +82,11 @@ export function SiteHeader() {
                   Dashboard
                 </Button>
               </Link>
-              <div className="flex items-center gap-2 rounded-lg border border-surface-border bg-surface-subtle px-2.5 py-1.5">
+              <Link
+                href="/profile"
+                aria-label="Your profile"
+                className="flex items-center gap-2 rounded-lg border border-surface-border bg-surface-subtle px-2.5 py-1.5 transition-colors hover:border-brand-200 hover:bg-brand-50"
+              >
                 <span className="grid h-6 w-6 place-items-center rounded-full bg-brand-100 text-2xs font-semibold text-brand-700">
                   {initials(user.name)}
                 </span>
@@ -90,7 +94,7 @@ export function SiteHeader() {
                   <p className="text-xs font-medium text-ink">{user.name}</p>
                   <p className="text-2xs text-ink-faint">{user.role.toLowerCase()}</p>
                 </div>
-              </div>
+              </Link>
               <Button
                 variant="ghost"
                 size="icon"
@@ -128,7 +132,7 @@ export function SiteHeader() {
       </div>
 
       {menuOpen && (
-        <div className="animate-fade-in border-t border-surface-border bg-surface md:hidden">
+        <div className="animate-fade-in max-h-[calc(100dvh-4rem)] overflow-y-auto border-t border-surface-border bg-surface md:hidden">
           <nav className="container-page flex flex-col gap-1 py-3" aria-label="Mobile">
             {PUBLIC_LINKS.map((link) => (
               <Link
@@ -155,6 +159,11 @@ export function SiteHeader() {
                       Dashboard
                     </Button>
                   </Link>
+                  <Link href="/profile" onClick={() => setMenuOpen(false)}>
+                    <Button variant="outline" className="w-full">
+                      Profile
+                    </Button>
+                  </Link>
                   <Button variant="ghost" className="w-full" onClick={handleLogout}>
                     Sign out
                   </Button>
@@ -178,8 +187,8 @@ export function SiteHeader() {
 
       {process.env.NEXT_PUBLIC_DEMO_MODE === "true" && (
         <div className="border-b border-caution/20 bg-caution-soft">
-          <div className="container-page flex items-center gap-2 py-1.5">
-            <ShieldCheck className="h-3.5 w-3.5 text-caution-strong" aria-hidden />
+          <div className="container-page flex items-start gap-2 py-2">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-caution-strong" aria-hidden />
             <p className="text-xs text-caution-strong">
               <Badge tone="caution" className="mr-2">
                 DEMO MODE

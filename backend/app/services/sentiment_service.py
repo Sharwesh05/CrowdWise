@@ -120,6 +120,93 @@ class XLMRobertaProvider(SentimentProvider):
         ]
 
 
+class NvidiaSentimentProvider(SentimentProvider):
+    """Sentiment via the same NVIDIA NIM model used for campaign analysis.
+
+    Classification is **batched**: one request carries every pending comment and
+    returns one verdict per index. A per-comment call would be indefensible here
+    — the reasoning models on NIM take tens of seconds each, so classifying a
+    campaign's feedback one at a time would cost minutes and a call per item.
+
+    The HTTP client, retry, JSON recovery and 404 diagnosis are reused from
+    ai_service rather than reimplemented.
+    """
+
+    name = "nvidia"
+    # A batch large enough to be worth one call, small enough that the model
+    # keeps the indices straight.
+    _BATCH = 20
+
+    _LABELS = {
+        "POSITIVE": Sentiment.POSITIVE,
+        "NEGATIVE": Sentiment.NEGATIVE,
+        "NEUTRAL": Sentiment.NEUTRAL,
+    }
+
+    def __init__(self):
+        from app.services.ai_service import NvidiaProvider  # noqa: PLC0415
+
+        self._client = NvidiaProvider()
+        self.model = self._client.model
+
+    def classify(self, text: str) -> SentimentResult:
+        return self.classify_batch([text])[0]
+
+    def classify_batch(self, texts: list[str]) -> list[SentimentResult]:
+        from app.services.ai_service import load_prompt  # noqa: PLC0415
+
+        if not texts:
+            return []
+        results: list[SentimentResult] = []
+        system, template = load_prompt("sentiment")
+        for start in range(0, len(texts), self._BATCH):
+            chunk = texts[start : start + self._BATCH]
+            listing = "\n".join(
+                f"[{index}] {preprocess(text) or '(empty)'}" for index, text in enumerate(chunk)
+            )
+            data = self._client.call_json(
+                system, template.format(comments=listing), label="sentiment"
+            )
+            results.extend(self._parse(data, len(chunk)))
+        return results
+
+    def _parse(self, data: dict, expected: int) -> list[SentimentResult]:
+        """Map the model's reply back onto input order, strictly.
+
+        A missing or unusable index is an error rather than a silent NEUTRAL:
+        analyze_feedback marks the item FAILED and the worker retries it, which
+        is the module's existing contract for a classification that did not
+        happen. Quietly inventing a label would corrupt the aggregate chart.
+        """
+        rows = data.get("results")
+        if not isinstance(rows, list):
+            raise ValueError(f"Sentiment reply had no results list: {str(data)[:200]}")
+
+        by_index: dict[int, SentimentResult] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                index = int(row.get("index"))
+            except (TypeError, ValueError):
+                continue
+            label = self._LABELS.get(str(row.get("label", "")).strip().upper())
+            if label is None or not 0 <= index < expected:
+                continue
+            try:
+                score = round(min(max(float(row.get("score", 0.5)), 0.0), 1.0), 4)
+            except (TypeError, ValueError):
+                score = 0.5
+            by_index[index] = SentimentResult(label=str(label), score=score, model=self.model)
+
+        missing = [i for i in range(expected) if i not in by_index]
+        if missing:
+            raise ValueError(
+                f"Sentiment reply missing {len(missing)} of {expected} indices: {missing[:5]}"
+            )
+        return [by_index[i] for i in range(expected)]
+
+
 class MockSentimentProvider(SentimentProvider):
     """Lexicon-and-negation classifier used when the ML wheels are absent.
 
@@ -202,9 +289,20 @@ _provider: SentimentProvider | None = None
 def get_provider() -> SentimentProvider:
     global _provider
     if _provider is None:
-        if settings.sentiment_provider == "xlm-roberta":
-            _provider = XLMRobertaProvider()
-        else:
+        try:
+            if settings.sentiment_provider == "xlm-roberta":
+                _provider = XLMRobertaProvider()
+            elif settings.sentiment_provider == "nvidia":
+                _provider = NvidiaSentimentProvider()
+            else:
+                _provider = MockSentimentProvider()
+        except Exception as exc:
+            # A misconfigured provider must not take the app down at import time.
+            logger.error(
+                "sentiment_provider_init_failed",
+                provider=settings.sentiment_provider,
+                error=str(exc),
+            )
             _provider = MockSentimentProvider()
         logger.info("sentiment_provider_selected", provider=_provider.name)
     return _provider
@@ -276,35 +374,77 @@ def classify_aspects(text: str) -> list[str]:
 # --------------------------------------------------------------------------
 # Service operations
 # --------------------------------------------------------------------------
+def _apply_result(db: Session, feedback: Feedback, result: SentimentResult) -> None:
+    """Write one classification onto a feedback row and audit it."""
+    aspects = classify_aspects(feedback.text)
+    feedback.sentiment = result.label
+    feedback.sentiment_score = result.score
+    feedback.sentiment_model = result.model
+    feedback.aspect = aspects[0]
+    feedback.aspects = aspects
+    feedback.analyzed_at = utcnow()
+    db.flush()
+    audit_service.record_both(
+        db,
+        campaign_id=feedback.campaign_id,
+        action=EventType.SENTIMENT_ANALYZED,
+        actor_id=None,
+        metadata={
+            "feedback_id": feedback.id,
+            "sentiment": result.label,
+            "aspect": aspects[0],
+            "model": result.model,
+        },
+    )
+
+
 def analyze_feedback(db: Session, feedback: Feedback) -> Feedback:
     """Classify one feedback item. Failure is retryable, never silent."""
     try:
-        result = get_provider().classify(feedback.text)
-        aspects = classify_aspects(feedback.text)
-        feedback.sentiment = result.label
-        feedback.sentiment_score = result.score
-        feedback.sentiment_model = result.model
-        feedback.aspect = aspects[0]
-        feedback.aspects = aspects
-        feedback.analyzed_at = utcnow()
-        db.flush()
-        audit_service.record_both(
-            db,
-            campaign_id=feedback.campaign_id,
-            action=EventType.SENTIMENT_ANALYZED,
-            actor_id=None,
-            metadata={
-                "feedback_id": feedback.id,
-                "sentiment": result.label,
-                "aspect": aspects[0],
-                "model": result.model,
-            },
-        )
+        _apply_result(db, feedback, get_provider().classify(feedback.text))
     except Exception as exc:
         logger.error("sentiment_failed", feedback_id=feedback.id, error=str(exc))
         feedback.sentiment = str(Sentiment.FAILED)
         db.flush()
     return feedback
+
+
+def analyze_batch(db: Session, items: list[Feedback]) -> int:
+    """Classify a whole set in as few provider calls as the provider allows.
+
+    This is the path that makes batching real. Classifying a backlog one item at
+    a time costs one request each, which for an LLM provider is tens of seconds
+    per comment; `classify_batch` sends them together. A batch that fails as a
+    whole is retried per item, so one unparseable reply cannot cost the entire
+    set — and anything still failing is left FAILED for the next sweep.
+    """
+    if not items:
+        return 0
+    provider = get_provider()
+    try:
+        results = provider.classify_batch([item.text for item in items])
+        if len(results) != len(items):
+            raise ValueError(
+                f"provider returned {len(results)} results for {len(items)} items"
+            )
+    except Exception as exc:
+        logger.warning(
+            "sentiment_batch_failed", count=len(items), error=str(exc)[:200]
+        )
+        for item in items:
+            analyze_feedback(db, item)
+        db.commit()
+        return len(items)
+
+    for item, result in zip(items, results):
+        try:
+            _apply_result(db, item, result)
+        except Exception as exc:
+            logger.error("sentiment_failed", feedback_id=item.id, error=str(exc))
+            item.sentiment = str(Sentiment.FAILED)
+            db.flush()
+    db.commit()
+    return len(items)
 
 
 def analyze_pending(db: Session, limit: int = 100) -> int:
@@ -315,12 +455,27 @@ def analyze_pending(db: Session, limit: int = 100) -> int:
         .order_by(Feedback.id)
         .limit(limit)
     )
-    pending = list(db.execute(stmt).scalars().all())
-    for item in pending:
-        analyze_feedback(db, item)
-    if pending:
-        db.commit()
-    return len(pending)
+    return analyze_batch(db, list(db.execute(stmt).scalars().all()))
+
+
+def reanalyze_campaign(db: Session, campaign_id: int, limit: int = 200) -> int:
+    """Re-classify one campaign's feedback and return how many were processed.
+
+    Scoped to a campaign rather than reusing analyze_pending, whose global sweep
+    belongs to the worker: an operator refreshing one campaign should not be
+    made to wait on every other campaign's backlog. FAILED items are included so
+    a transient provider outage can be recovered from the UI.
+    """
+    stmt = (
+        select(Feedback)
+        .where(
+            Feedback.campaign_id == campaign_id,
+            Feedback.sentiment.in_([str(Sentiment.PENDING), str(Sentiment.FAILED)]),
+        )
+        .order_by(Feedback.id)
+        .limit(limit)
+    )
+    return analyze_batch(db, list(db.execute(stmt).scalars().all()))
 
 
 def feedback_count(db: Session, campaign_id: int) -> int:

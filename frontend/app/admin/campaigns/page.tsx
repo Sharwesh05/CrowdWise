@@ -56,7 +56,7 @@ function CampaignsTable() {
             Every campaign on the platform, at every stage of the lifecycle.
           </p>
         </div>
-        <div className="w-56">
+        <div className="w-full sm:w-56">
           <Select
             value={status}
             onChange={(event) => setStatus(event.target.value)}

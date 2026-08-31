@@ -203,6 +203,7 @@ export interface PublicCampaign extends CampaignSummary {
   outcome_rules: OutcomeRules | null;
   analysis: AIAnalysis | null;
   sentiment: SentimentSummary | null;
+  update_count: number;
   insights: CommunityInsight | null;
   health: CampaignHealth | null;
   blockchain: BlockchainSummary | null;
@@ -286,6 +287,51 @@ export interface Contribution {
   created_at: string;
   payment: PaymentRecord | null;
   blockchain_record: BlockchainRecord | null;
+}
+
+export interface ProfileChainRecord extends BlockchainRecord {
+  campaign_public_id: string | null;
+  campaign_title: string | null;
+}
+
+export interface Profile {
+  user: {
+    id: number;
+    name: string;
+    email: string;
+    phone: string | null;
+    role: UserRole;
+    wallet_address: string | null;
+    is_active: boolean;
+    created_at: string | null;
+    kyc_status: string | null;
+    kyc_verified_at: string | null;
+  };
+  stats: {
+    total_contributed: string;
+    contributions: number;
+    campaigns_supported: number;
+    votes_cast: number;
+    anchored_on_chain: number;
+    awaiting_anchor: number;
+    chain_records: number;
+    first_contribution_at: string | null;
+    last_contribution_at: string | null;
+  };
+  contributions: Contribution[];
+  chain_records: ProfileChainRecord[];
+  votes: Vote[];
+}
+
+export interface CampaignUpdate {
+  id: number;
+  campaign_id: number;
+  title: string;
+  body: string;
+  is_pinned: boolean;
+  author_name: string | null;
+  created_at: string;
+  updated_at: string | null;
 }
 
 export interface PublicContribution {
@@ -415,6 +461,7 @@ export interface AdminReview {
   application_fee_paid: boolean;
   application_fee_webhook_verified: boolean;
   analysis: AIAnalysis | null;
+  sentiment: SentimentSummary | null;
   risk_indicators: string[];
   recommended_questions: string[];
   documents: { id: number; file_name: string; mime_type: string; size: number; created_at: string; url: string | null }[];

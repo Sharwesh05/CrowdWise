@@ -6,7 +6,7 @@
 #   docker compose exec backend python seed.py
 #
 # Every service reads its configuration from .env, so switching a provider (demo
-# payments to real Razorpay, mock AI to a Gemma endpoint, the simulated ledger to
+# payments to real Razorpay, mock AI to NVIDIA NIM, the simulated ledger to
 # the Hardhat node) is a config change, never a code change.
 
 name: crowdwise
@@ -41,6 +41,13 @@ services:
     volumes:
       # The host reads the deployed contract address from here.
       - ./blockchain/deployments:/app/deployments
+    # SELinux (Fedora/RHEL) denies a container access to a bind mount it cannot
+    # label. The usual `:z` relabel needs xattrs, which NTFS/exFAT do not have —
+    # so on a repo checked out to such a filesystem, relabelling fails and the
+    # deploy cannot write deployments/localhost.json. Disabling the label check
+    # for this one local dev container is the portable fix.
+    security_opt:
+      - label:disable
     restart: unless-stopped
 
   backend:
@@ -112,6 +119,35 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------
+  # HTTPS front door for LAN demos. Optional: start it only when you need a
+  # phone to reach the app, with `docker compose --profile https up -d caddy`.
+  # Browsers refuse camera access over plain HTTP on a LAN address, so the
+  # in-page QR scanner needs this.
+  # ---------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: crowdwise-caddy
+    profiles: ["https"]
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "443:443"
+    volumes:
+      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infrastructure/caddy/tls.crt:/etc/caddy/tls.crt:ro
+      - ./infrastructure/caddy/tls.key:/etc/caddy/tls.key:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    # Same SELinux/NTFS constraint as the blockchain service: the bind mount
+    # cannot be labelled on a filesystem without xattrs.
+    security_opt:
+      - label:disable
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   backend_storage:
+  caddy_data:
+  caddy_config:

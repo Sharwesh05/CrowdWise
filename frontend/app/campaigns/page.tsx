@@ -98,7 +98,7 @@ export default function CampaignsPage() {
             <SlidersHorizontal className="h-4 w-4" aria-hidden />
             Filter
           </span>
-          <div className="w-44">
+          <div className="w-full sm:w-44">
             <Select
               value={category}
               onChange={(event) => {
@@ -115,7 +115,7 @@ export default function CampaignsPage() {
               ))}
             </Select>
           </div>
-          <div className="w-44">
+          <div className="w-full sm:w-44">
             <Select
               value={status}
               onChange={(event) => {
@@ -131,7 +131,7 @@ export default function CampaignsPage() {
               ))}
             </Select>
           </div>
-          <div className="w-48">
+          <div className="w-full sm:w-48">
             <Select
               value={sort}
               onChange={(event) => {
@@ -153,7 +153,7 @@ export default function CampaignsPage() {
             </Button>
           )}
           {data && (
-            <span className="ml-auto text-sm text-ink-muted" aria-live="polite">
+            <span className="text-sm text-ink-muted sm:ml-auto" aria-live="polite">
               {data.total} campaign{data.total === 1 ? "" : "s"}
             </span>
           )}

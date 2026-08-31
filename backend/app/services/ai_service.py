@@ -9,7 +9,7 @@ Two guarantees this module provides:
 2. **AI is decision support.** Nothing here approves a campaign. The disclaimer
    travels with every result.
 
-Provider selection is environment-driven (`AI_PROVIDER=mock|gemma`), so the demo
+Provider selection is environment-driven (`AI_PROVIDER=mock|gemma|nvidia`), so the demo
 runs with no credentials and production swaps in a real endpoint without touching
 callers.
 """
@@ -163,6 +163,13 @@ _FALLBACK_PROMPTS: dict[str, tuple[str, str]] = {
         "Target: INR {target_amount}\nProblem: {problem_statement}\n"
         "Solution: {proposed_solution}\nDescription: {description}",
     ),
+    "sentiment": (
+        "You are a sentiment classifier for crowdfunding feedback. Reply with one "
+        "JSON object only: {\"results\": [{\"index\": 0, \"label\": "
+        "\"POSITIVE|NEUTRAL|NEGATIVE\", \"score\": 0.9}]}. Exactly one entry per "
+        "input index.",
+        "Classify each comment.\n\n{comments}",
+    ),
     "community_insights": (
         "You are a community analyst. Reply with one JSON object only, matching keys: "
         "community_summary, positive_themes, top_concerns, recommendations, "
@@ -189,58 +196,130 @@ class CampaignAnalysisProvider(ABC):
     def summarize_community(self, payload: dict[str, Any]) -> CommunityInsightResult: ...
 
 
-class GemmaProvider(CampaignAnalysisProvider):
-    """Gemma over any OpenAI-compatible endpoint (Ollama, vLLM, hosted gateway).
+class OpenAICompatibleProvider(CampaignAnalysisProvider):
+    """One chat client for every OpenAI-compatible endpoint we support.
 
-    Endpoint, key and model all come from env, so switching from a local Gemma to
-    a hosted one is configuration, not code.
+    Ollama, vLLM, a hosted gateway and NVIDIA NIM all speak the same
+    `/chat/completions` dialect, so the differences that actually matter —
+    endpoint, key, model, whether JSON mode is honoured — are constructor
+    arguments rather than separate implementations.
     """
 
-    name = "gemma"
+    def __init__(
+        self,
+        *,
+        name: str,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float,
+        json_mode: str = "auto",
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ):
+        self.name = name
+        self.model = model
+        self._base_url = (base_url or "").rstrip("/")
+        self._timeout = timeout
+        self._max_tokens = max_tokens
+        self._temperature = temperature
+        self._json_mode = json_mode
+        self._headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if api_key:
+            self._headers["Authorization"] = f"Bearer {api_key}"
 
-    def __init__(self):
-        self.model = settings.gemma_model
-        self._base_url = settings.gemma_base_url.rstrip("/")
-        self._headers = {"Content-Type": "application/json"}
-        if settings.gemma_api_key:
-            self._headers["Authorization"] = f"Bearer {settings.gemma_api_key}"
+    def _body(self, system: str, user: str, json_mode: bool) -> dict[str, Any]:
+        """Minimal by default: model and messages only.
 
-    def _chat(self, system: str, user: str) -> str:
+        Every extra field is one more thing a given model in a large catalogue
+        can reject or mishandle — reasoning models in particular spend their
+        budget thinking, so a `max_tokens` meant for a plain model truncates them
+        before they emit anything. Extras are sent only when explicitly asked for.
+        """
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if self._temperature is not None:
+            body["temperature"] = self._temperature
+        if self._max_tokens:
+            body["max_tokens"] = self._max_tokens
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        return body
+
+    def _chat(self, system: str, user: str, json_mode: bool) -> str:
         response = httpx.post(
             f"{self._base_url}/chat/completions",
             headers=self._headers,
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-                "stream": False,
-            },
-            timeout=settings.gemma_timeout_seconds,
+            json=self._body(system, user, json_mode),
+            timeout=self._timeout,
         )
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"Model {self.model!r} is not available on this account at "
+                f"{self._base_url}. List what your key can reach with "
+                f"GET {self._base_url}/models, then set the matching env model."
+            )
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError) as exc:
+            raise RuntimeError(f"Unexpected chat response shape: {str(data)[:300]}") from exc
+        content = message.get("content") or ""
+        if not content.strip():
+            # Reasoning models put their scratchpad in reasoning_content and can
+            # leave content empty when they run out of budget mid-thought.
+            finish = (data.get("choices") or [{}])[0].get("finish_reason")
+            raise RuntimeError(f"Model returned empty content (finish_reason={finish!r}).")
+        return content
+
+    def _attempts(self) -> list[bool]:
+        """Whether to send response_format on each successive attempt.
+
+        `auto` asks plainly first — the prompt already demands JSON and
+        extract_json recovers it from prose — and only escalates to JSON mode if
+        that came back unparseable. That order keeps the request minimal for the
+        models that need it minimal, without giving up the strictness for models
+        that honour it.
+        """
+        if self._json_mode == "on":
+            return [True, True]
+        if self._json_mode == "off":
+            return [False, False]
+        return [False, True]
 
     def _call_json(self, prompt_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         system, template = load_prompt(prompt_name)
         user = template.format_map(_SafeDict(payload))
+        return self.call_json(system, user, label=prompt_name)
+
+    def call_json(self, system: str, user: str, *, label: str = "adhoc") -> dict[str, Any]:
+        """Public entry point for callers that build their own messages.
+
+        Sentiment classification uses this so it inherits the retry, the JSON
+        recovery and the 404 diagnosis rather than reimplementing an HTTP client.
+        """
         last_error: Exception | None = None
-        # One retry: transient endpoint errors and malformed JSON are common and
-        # cheap to recover from. A second failure escalates to the fallback.
-        for attempt in (1, 2):
+        for attempt, json_mode in enumerate(self._attempts(), start=1):
             try:
-                raw = self._chat(system, user)
-                return extract_json(raw)
+                return extract_json(self._chat(system, user, json_mode))
             except Exception as exc:
                 last_error = exc
                 logger.warning(
-                    "gemma_call_failed", prompt=prompt_name, attempt=attempt, error=str(exc)
+                    "llm_call_failed",
+                    provider=self.name,
+                    model=self.model,
+                    prompt=label,
+                    attempt=attempt,
+                    json_mode=json_mode,
+                    error=str(exc)[:300],
                 )
-        raise RuntimeError(f"Gemma call failed after retry: {last_error}")
+        raise RuntimeError(f"{self.name} call failed after retry: {last_error}")
 
     def analyze_campaign(self, payload: dict[str, Any]) -> CampaignAnalysisResult:
         return CampaignAnalysisResult.model_validate(
@@ -250,6 +329,50 @@ class GemmaProvider(CampaignAnalysisProvider):
     def summarize_community(self, payload: dict[str, Any]) -> CommunityInsightResult:
         return CommunityInsightResult.model_validate(
             self._call_json("community_insights", payload)
+        )
+
+
+class GemmaProvider(OpenAICompatibleProvider):
+    """Gemma over any OpenAI-compatible endpoint (Ollama, vLLM, hosted gateway).
+
+    Endpoint, key and model all come from env, so switching from a local Gemma to
+    a hosted one is configuration, not code.
+    """
+
+    def __init__(self):
+        super().__init__(
+            name="gemma",
+            base_url=settings.gemma_base_url,
+            api_key=settings.gemma_api_key,
+            model=settings.gemma_model,
+            timeout=settings.gemma_timeout_seconds,
+        )
+
+
+class NvidiaProvider(OpenAICompatibleProvider):
+    """NVIDIA NIM — the hosted build.nvidia.com gateway or a self-hosted NIM.
+
+    Both expose an OpenAI-compatible API, so the only thing that changes between
+    them is `NVIDIA_BASE_URL`. The model catalogue is wide and JSON-mode support
+    varies across it, hence the auto-downgrade in the base class.
+    """
+
+    def __init__(self):
+        if not settings.nvidia_api_key and "api.nvidia.com" in settings.nvidia_base_url:
+            # Self-hosted NIM needs no key; the hosted gateway always does.
+            raise RuntimeError(
+                "NVIDIA_API_KEY is not set. Create a key at build.nvidia.com and set "
+                "NVIDIA_API_KEY, or point NVIDIA_BASE_URL at a self-hosted NIM."
+            )
+        super().__init__(
+            name="nvidia",
+            base_url=settings.nvidia_base_url,
+            api_key=settings.nvidia_api_key,
+            model=settings.nvidia_model,
+            timeout=settings.nvidia_timeout_seconds,
+            json_mode=settings.nvidia_json_mode,
+            max_tokens=settings.nvidia_max_tokens,
+            temperature=settings.nvidia_temperature,
         )
 
 
@@ -453,6 +576,10 @@ def extract_json(raw: str) -> dict[str, Any]:
     recovering here is cheaper than a retry.
     """
     text = (raw or "").strip()
+    # Reasoning models (several NIM ones) prepend a <think> block whose braces
+    # would otherwise be mistaken for the start of the payload.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I).strip()
+    text = re.sub(r"^<think>.*", "", text, flags=re.S | re.I).strip() or text
     fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
     if fence:
         text = fence.group(1).strip()
@@ -473,13 +600,29 @@ def extract_json(raw: str) -> dict[str, Any]:
     raise ValueError("Unterminated JSON object in model response.")
 
 
+_PROVIDERS: dict[str, type[CampaignAnalysisProvider]] = {
+    "gemma": GemmaProvider,
+    "nvidia": NvidiaProvider,
+    "mock": MockAnalysisProvider,
+}
+
 _provider: CampaignAnalysisProvider | None = None
+
+
+def _build_provider(name: str) -> CampaignAnalysisProvider:
+    """Never let a misconfigured provider take the app down at import time."""
+    factory = _PROVIDERS.get(name, MockAnalysisProvider)
+    try:
+        return factory()
+    except Exception as exc:
+        logger.error("ai_provider_init_failed", provider=name, error=str(exc))
+        return MockAnalysisProvider()
 
 
 def get_provider() -> CampaignAnalysisProvider:
     global _provider
     if _provider is None:
-        _provider = GemmaProvider() if settings.ai_provider == "gemma" else MockAnalysisProvider()
+        _provider = _build_provider(settings.ai_provider)
         logger.info("ai_provider_selected", provider=_provider.name, model=_provider.model)
     return _provider
 

@@ -86,7 +86,7 @@ function KycContent() {
         {/* Progress */}
         <Card className="mb-6">
           <CardContent className="p-5">
-            <ol className="flex items-center justify-between">
+            <ol className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               {STEPS.map((step, index) => {
                 const reachedIndex = status ? STEPS.indexOf(status.status as typeof STEPS[number]) : -1;
                 const done = reachedIndex >= index && reachedIndex !== -1;

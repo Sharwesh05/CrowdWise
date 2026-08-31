@@ -1,0 +1,59 @@
+# HTTPS for local demos.
+#
+# Browsers expose the camera (getUserMedia) only in a secure context: HTTPS, or
+# localhost. A phone reaching this machine over http://<lan-ip>:3000 therefore
+# cannot use the in-page QR scanner at all. This proxy puts both the app and the
+# API behind one HTTPS origin so the scanner works on a real device.
+#
+# Serving both from one origin also removes the CORS problem: the browser sees
+# same-origin requests, so no Access-Control headers are needed.
+#
+# Note the frontend is still configured with an ABSOLUTE api url. It does not
+# call relative paths: frontend/lib/api.ts falls back to http://localhost:8000
+# whenever NEXT_PUBLIC_API_URL is empty, because it tests with `||` (falsy)
+# rather than `??` (nullish). So NEXT_PUBLIC_API_URL must name this origin, and
+# because it is baked in at image build time, changing it needs a frontend
+# rebuild rather than a restart.
+#
+# The certificate is an explicit self-signed pair with the LAN IP in its SAN,
+# not Caddy's managed `tls internal`. Managed certificates are selected by SNI,
+# and SNI cannot carry an IP address — so a browser reaching this by IP sends no
+# server name, Caddy cannot pick a certificate, and the handshake dies with
+# "tlsv1 alert internal error". An explicit certificate is served regardless.
+#
+# Regenerate for a different address with:
+#   openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+#     -keyout tls.key -out tls.crt -subj "/CN=CrowdWise local demo" \
+#     -addext "subjectAltName=IP:<your-ip>,IP:127.0.0.1,DNS:localhost"
+#
+# It is self-signed, so a phone shows a one-time warning to tap through. That is
+# expected for a LAN demo; a public deployment would use a real certificate.
+
+{
+	auto_https disable_redirects
+}
+
+:443 {
+	tls /etc/caddy/tls.crt /etc/caddy/tls.key
+
+	# The API is mounted under /api on the same origin as the app, so both share
+	# a scheme, host and port and the browser treats every call as same-origin.
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle /health {
+		reverse_proxy backend:8000
+	}
+	handle /docs* {
+		reverse_proxy backend:8000
+	}
+	handle /openapi.json {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	encode gzip
+}

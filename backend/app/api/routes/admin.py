@@ -176,6 +176,7 @@ def review_campaign(public_id: str, admin: AdminUser, db: DbSession) -> AdminCam
         application_fee_paid=fee_payment is not None,
         application_fee_webhook_verified=bool(fee_payment and fee_payment.webhook_verified),
         analysis=serializers.analysis_response(analysis),
+        sentiment=serializers.sentiment_summary(db, campaign.id),
         risk_indicators=_risk_indicators(db, campaign, analysis),
         recommended_questions=(analysis.questions_for_creator if analysis else []) or [],
         documents=[

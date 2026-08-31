@@ -18,7 +18,8 @@ import sys
 from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from pathlib import Path
+from sqlalchemy import select, text
 
 from app.core.config import settings
 from app.core.db import Base, SessionLocal, engine, utcnow
@@ -353,9 +354,15 @@ def build_campaign(db, spec: dict, users: dict[str, User], admin: User) -> Campa
         )
         pay(db, contribution_payment)
 
-    for email, text, rating in spec["feedback"]:
-        feedback = feedback_service.create_feedback(db, campaign, users[email], text, rating)
-        sentiment_service.analyze_feedback(db, feedback)
+    # Create every comment first, then classify them in one batch. Per-item
+    # classification against an LLM provider costs a request each, which turned
+    # a four-campaign seed into a multi-minute wait.
+    created_feedback = [
+        feedback_service.create_feedback(db, campaign, users[email], text, rating)
+        for email, text, rating in spec["feedback"]
+    ]
+    if created_feedback:
+        sentiment_service.analyze_batch(db, created_feedback)
 
     if spec["feedback"]:
         ai_service.generate_community_insights(db, campaign)
@@ -377,9 +384,50 @@ def build_campaign(db, spec: dict, users: dict[str, User], admin: User) -> Campa
 
 
 def reset_database() -> None:
+    """Drop everything and rebuild the schema.
+
+    On PostgreSQL this drops the whole schema rather than using
+    `Base.metadata.drop_all`. drop_all emits a DROP for each constraint the
+    models declare by name, which fails with UndefinedObject when the live
+    schema was built by Alembic and named its constraints differently — the
+    common case, since `alembic upgrade head` is the documented setup path.
+    Dropping the schema is also indifferent to objects the models no longer know
+    about, such as a table left behind by a reverted migration.
+
+    Alembic is stamped afterwards, because create_all records no revision and an
+    unstamped database makes the next `alembic upgrade head` replay the initial
+    migration and fail on tables that already exist.
+    """
     logger.warning("dropping_all_tables")
-    Base.metadata.drop_all(bind=engine)
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA public CASCADE"))
+            connection.execute(text("CREATE SCHEMA public"))
+    else:
+        Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    _stamp_alembic_head()
+
+
+def _stamp_alembic_head() -> None:
+    """Record the current head so later migrations apply cleanly."""
+    try:
+        from alembic import command  # noqa: PLC0415
+        from alembic.config import Config  # noqa: PLC0415
+
+        ini = Path(__file__).resolve().parent / "alembic.ini"
+        if not ini.exists():
+            logger.warning("alembic_ini_missing", path=str(ini))
+            return
+        command.stamp(Config(str(ini)), "head")
+    except Exception as exc:
+        # Not fatal: the data is seeded either way, and the operator can stamp by
+        # hand. Say so loudly rather than leaving a silent trap.
+        logger.warning("alembic_stamp_failed", error=str(exc))
+        print(
+            "  NOTE: could not stamp Alembic. Run `alembic stamp head` before "
+            "your next `alembic upgrade head`."
+        )
 
 
 def main() -> int:
@@ -396,7 +444,7 @@ def main() -> int:
     if args.reset:
         if settings.blockchain_provider == "web3":
             # Campaign references are derived deterministically from the public
-            # id, so reusing CMP-101 against a chain that still holds the old
+            # id, so reusing the same titles against a chain that still holds the old
             # run will revert with CampaignExists / VotingHasClosed.
             print()
             print(

@@ -1,0 +1,20 @@
+# Normalise line endings so the repo is identical on Linux, macOS and Windows.
+# Without this, a checkout on one OS shows every tracked file as modified on
+# another. Text is stored LF in git and checked out LF everywhere.
+* text=auto eol=lf
+
+# Shell scripts and Dockerfiles break outright with CRLF inside a container.
+*.sh   text eol=lf
+Dockerfile* text eol=lf
+*.Dockerfile text eol=lf
+
+# Binaries git must never touch.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.woff binary
+*.woff2 binary
+*.db   binary

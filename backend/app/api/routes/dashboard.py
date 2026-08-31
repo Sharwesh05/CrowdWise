@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from fastapi import APIRouter
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.api import serializers
 from app.core.deps import ContributorUser, CreatorOrAdmin, CurrentUser, DbSession
@@ -210,5 +210,128 @@ def contributor_dashboard(user: CurrentUser, db: DbSession) -> dict:
         ],
         "past_votes": [
             serializers.vote_response(v, v.campaign).model_dump(mode="json") for v in votes[:10]
+        ],
+    }
+
+
+@router.get("/profile")
+def profile(user: CurrentUser, db: DbSession) -> dict:
+    """Everything one account owns: identity, money, and its on-chain trail.
+
+    The contributor dashboard answers "what should I do next"; this answers
+    "what has been recorded about me". It therefore joins the three stores the
+    platform writes to — Postgres for the contribution, the gateway reference on
+    the payment, and the anchoring transaction — so a contributor can follow one
+    payment from rupees to block number without trusting a summary.
+    """
+    from app.models.chain import BlockchainTransaction  # noqa: PLC0415
+    from app.models.user import KYCVerification  # noqa: PLC0415
+
+    contributions = list(
+        db.execute(
+            select(Contribution)
+            .where(Contribution.contributor_id == user.id)
+            .order_by(Contribution.id.desc())
+        ).scalars().all()
+    )
+    votes = list(
+        db.execute(
+            select(Vote).where(Vote.contributor_id == user.id).order_by(Vote.id.desc())
+        ).scalars().all()
+    )
+
+    verified_total = sum(
+        (Decimal(c.amount) for c in contributions if c.status in VERIFIED), Decimal("0")
+    )
+    anchored = [
+        c for c in contributions if c.status == str(ContributionStatus.BLOCKCHAIN_RECORDED)
+    ]
+    awaiting = [
+        c
+        for c in contributions
+        if c.status
+        in (str(ContributionStatus.BLOCKCHAIN_PENDING), str(ContributionStatus.PAYMENT_VERIFIED))
+    ]
+
+    # Every anchoring transaction this user caused: their contributions and
+    # their votes. Campaign-level records (registration, voting opened/closed)
+    # belong to the campaign, not to a person, so they are deliberately absent.
+    contribution_ids = [c.id for c in contributions]
+    vote_ids = [v.id for v in votes]
+    records: list[BlockchainTransaction] = []
+    if contribution_ids or vote_ids:
+        clauses = []
+        if contribution_ids:
+            clauses.append(BlockchainTransaction.contribution_id.in_(contribution_ids))
+        if vote_ids:
+            clauses.append(BlockchainTransaction.vote_id.in_(vote_ids))
+        records = list(
+            db.execute(
+                select(BlockchainTransaction)
+                .where(or_(*clauses))
+                .order_by(BlockchainTransaction.id.desc())
+            ).scalars().all()
+        )
+
+    kyc = db.execute(
+        select(KYCVerification)
+        .where(KYCVerification.user_id == user.id)
+        .order_by(KYCVerification.id.desc())
+        .limit(1)
+    ).scalars().first()
+
+    campaign_titles = {
+        c.id: (c.public_id, c.title)
+        for c in db.execute(
+            select(Campaign).where(
+                Campaign.id.in_({r.campaign_id for r in records} or {0})
+            )
+        ).scalars().all()
+    }
+
+    return {
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "phone": user.phone,
+            "role": user.role,
+            "wallet_address": user.wallet_address,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "kyc_status": kyc.status if kyc else None,
+            "kyc_verified_at": (
+                kyc.verified_at.isoformat() if kyc and kyc.verified_at else None
+            ),
+        },
+        "stats": {
+            "total_contributed": str(verified_total),
+            "contributions": len(contributions),
+            "campaigns_supported": len({c.campaign_id for c in contributions}),
+            "votes_cast": len(votes),
+            "anchored_on_chain": len(anchored),
+            "awaiting_anchor": len(awaiting),
+            "chain_records": len(records),
+            "first_contribution_at": (
+                contributions[-1].created_at.isoformat() if contributions else None
+            ),
+            "last_contribution_at": (
+                contributions[0].created_at.isoformat() if contributions else None
+            ),
+        },
+        "contributions": [
+            serializers.contribution_response(db, c).model_dump(mode="json")
+            for c in contributions
+        ],
+        "chain_records": [
+            {
+                **serializers.blockchain_record(record).model_dump(mode="json"),
+                "campaign_public_id": campaign_titles.get(record.campaign_id, (None, None))[0],
+                "campaign_title": campaign_titles.get(record.campaign_id, (None, None))[1],
+            }
+            for record in records
+        ],
+        "votes": [
+            serializers.vote_response(v, v.campaign).model_dump(mode="json") for v in votes
         ],
     }

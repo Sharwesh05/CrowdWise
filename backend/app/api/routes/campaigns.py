@@ -15,6 +15,7 @@ from app.schemas.campaign import (
     CampaignUpdateRequest,
     CreatorCampaign,
     QRResponse,
+    SentimentSummary,
 )
 from app.schemas.common import MessageResponse
 from app.schemas.payment import OrderResponse
@@ -24,6 +25,7 @@ from app.services import (
     campaign_service,
     payment_service,
     qr_service,
+    sentiment_service,
     storage_service,
 )
 from app.services.campaign_service import CampaignDraft
@@ -276,3 +278,53 @@ def close_campaign(campaign_id: int, user: CreatorOrAdmin, db: DbSession) -> Mes
     )
     db.commit()
     return MessageResponse(message="Campaign closed.")
+
+
+@router.post(
+    "/{public_id}/analysis/refresh",
+    response_model=AIAnalysisResponse,
+    tags=["AI"],
+    dependencies=[CSRFProtected],
+)
+def refresh_analysis(
+    public_id: str, user: CreatorOrAdmin, db: DbSession
+) -> AIAnalysisResponse:
+    """Re-run the campaign analysis and return the fresh result.
+
+    Distinct from `/{id}/analyze`, which is a lifecycle step: that one refuses
+    outside ANALYSIS_PENDING/UNDER_REVIEW because it also advances the campaign.
+    This one only writes a new analysis row, so a live campaign can be
+    re-analysed — after the proposal is edited, or after a model call degraded
+    to the heuristic fallback and the operator wants the real thing.
+    """
+    campaign = campaign_service.get_by_public_id(db, public_id)
+    if user.role != UserRole.ADMIN:
+        campaign_service.assert_owner(campaign, user)
+
+    analysis = ai_service.analyze_campaign(db, campaign, actor_id=user.id)
+    db.commit()
+    db.refresh(analysis)
+    return serializers.analysis_response(analysis)
+
+
+@router.post(
+    "/{public_id}/sentiment/refresh",
+    response_model=SentimentSummary,
+    tags=["AI"],
+    dependencies=[CSRFProtected],
+)
+def refresh_sentiment(public_id: str, user: CreatorOrAdmin, db: DbSession) -> SentimentSummary:
+    """Re-classify this campaign's unprocessed feedback and return the summary.
+
+    Sentiment is normally classified in the background as each comment arrives.
+    This is the manual recovery path for the case that background pass failed —
+    without it a FAILED item waits for the worker's next sweep with nothing in
+    the UI to trigger it.
+    """
+    campaign = campaign_service.get_by_public_id(db, public_id)
+    if user.role != UserRole.ADMIN:
+        campaign_service.assert_owner(campaign, user)
+
+    sentiment_service.reanalyze_campaign(db, campaign.id)
+    db.commit()
+    return serializers.sentiment_summary(db, campaign.id)

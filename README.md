@@ -49,7 +49,7 @@ Next.js frontend
 FastAPI  ──►  Service layer  ──►  PostgreSQL
       │            │
       │            ├──► Razorpay        (orders, checkout, signed webhooks)
-      │            ├──► Gemma           (campaign analysis, community summary)
+      │            ├──► NVIDIA NIM / LLM (campaign analysis, community summary)
       │            ├──► XLM-RoBERTa     (multilingual sentiment)
       │            ├──► EVM chain       (CrowdWiseRegistry.sol via web3.py)
       │            └──► Object storage  (local disk / S3 / R2)
@@ -99,8 +99,7 @@ cp .env.example .env
 # --- backend ---
 cd backend
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements.txt  # macOS / Linux
+source .venv/bin/activate && pip install -r requirements.txt
 
 # Zero-infra database (or point DATABASE_URL at Postgres)
 export DATABASE_URL="sqlite+pysqlite:///./crowdwise.db"
@@ -132,7 +131,7 @@ with placeholders). The switches that matter most:
 |---|---|---|
 | `DEMO_MODE` | `true` / `false` | Simulated KYC, admin demo controls, seeded data |
 | `PAYMENT_PROVIDER` | `demo` / `razorpay` | Credential-free signed payments, or real Razorpay |
-| `AI_PROVIDER` | `mock` / `gemma` | Heuristic analyst, or a Gemma endpoint |
+| `AI_PROVIDER` | `mock` / `nvidia` / `gemma` | Heuristic analyst, NVIDIA NIM, or any OpenAI-compatible endpoint |
 | `SENTIMENT_PROVIDER` | `mock` / `xlm-roberta` | Lexicon classifier, or the transformer model |
 | `BLOCKCHAIN_PROVIDER` | `mock` / `web3` | Simulated ledger, or a real EVM chain |
 | `STORAGE_PROVIDER` | `local` / `s3` | Local disk, or S3 / R2 / Supabase |
@@ -183,10 +182,17 @@ simulated ledger, clearly labelled as simulated everywhere it appears in the UI.
 ## AI configuration
 
 ```
-AI_PROVIDER=gemma
-GEMMA_BASE_URL=http://localhost:11434/v1     # Ollama, vLLM, or any OpenAI-compatible gateway
-GEMMA_MODEL=gemma3:4b
-GEMMA_API_KEY=                               # only if the endpoint requires one
+# NVIDIA NIM (hosted) — key from https://build.nvidia.com
+AI_PROVIDER=nvidia
+NVIDIA_API_KEY=nvapi-...
+NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b   # verify against GET /v1/models
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1   # or a self-hosted NIM container
+
+# Or any other OpenAI-compatible endpoint
+# AI_PROVIDER=gemma
+# GEMMA_BASE_URL=http://localhost:11434/v1   # Ollama, vLLM, or a hosted gateway
+# GEMMA_MODEL=gemma3:4b
+# GEMMA_API_KEY=                             # only if the endpoint requires one
 
 SENTIMENT_PROVIDER=xlm-roberta
 SENTIMENT_MODEL=cardiffnlp/twitter-xlm-roberta-base-sentiment
@@ -255,7 +261,9 @@ cd frontend && npx vitest run
 
 ## Demo flow
 
-The full 18-scene script is in [`docs/demo.md`](docs/demo.md). The short version:
+The full 18-scene script is in [`docs/demo.md`](docs/demo.md), and the commands,
+provider switches and known failure modes are in
+[`docs/runbook.md`](docs/runbook.md). The short version:
 
 1. Register a creator, complete demo KYC → **VERIFIED**
 2. Pay the ₹500 application fee → verified server-side
@@ -288,7 +296,7 @@ crowdwise/
 ├── blockchain/         Solidity + Hardhat + TypeChain
 ├── ai/prompts/         versioned prompt templates
 ├── infrastructure/     Dockerfiles
-├── docs/               architecture, api, demo, deployment
+├── docs/               architecture, api, demo, deployment, runbook
 └── docker-compose.yml
 ```
 

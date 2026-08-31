@@ -8,6 +8,7 @@ without KYC, fee verification, AI analysis and a human decision.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -44,12 +45,44 @@ logger = get_logger(__name__)
 # --------------------------------------------------------------------------
 # Identifiers
 # --------------------------------------------------------------------------
-def next_public_id(db: Session) -> str:
-    """Human-friendly, stable external id: CMP-100, CMP-101, ..."""
-    highest = db.execute(
-        select(func.max(Campaign.id))
-    ).scalar_one_or_none() or 0
-    return f"CMP-{100 + int(highest) + 1}"
+# Crockford base32: no I, L, O or U, so an id read aloud or copied off a QR
+# code cannot be confused between 1/I/L or 0/O.
+_ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_ID_LENGTH = 6
+
+
+def _title_digest(title: str, attempt: int) -> str:
+    """Deterministic short code for a title. 32**6 ≈ 1.07e9 codes."""
+    seed = slugify(title) or "campaign"
+    if attempt:
+        seed = f"{seed}#{attempt}"
+    value = int.from_bytes(
+        hashlib.blake2b(seed.encode("utf-8"), digest_size=8).digest(), "big"
+    )
+    out = []
+    for _ in range(_ID_LENGTH):
+        out.append(_ID_ALPHABET[value % len(_ID_ALPHABET)])
+        value //= len(_ID_ALPHABET)
+    return "".join(out)
+
+
+def next_public_id(db: Session, title: str) -> str:
+    """External id derived from the title: CMP-7QF2KD.
+
+    Derived rather than sequential so the id carries no information about how
+    many campaigns exist or in what order they were created — a count that
+    leaked from CMP-100, CMP-101, ... on every public URL and QR code. The
+    same title always yields the same code; a genuine collision (or a repeated
+    title) walks the attempt counter until the id is free.
+    """
+    for attempt in range(1000):
+        candidate = f"CMP-{_title_digest(title, attempt)}"
+        taken = db.execute(
+            select(Campaign.id).where(Campaign.public_id == candidate)
+        ).first()
+        if not taken:
+            return candidate
+    raise ConflictError("Could not allocate a campaign id; please retry.")
 
 
 def unique_slug(db: Session, title: str) -> str:
@@ -130,7 +163,7 @@ def create_campaign(db: Session, creator: User, draft: CampaignDraft) -> Campaig
         raise ValidationError("Deadline must be in the future.")
 
     campaign = Campaign(
-        public_id=next_public_id(db),
+        public_id=next_public_id(db, draft.title),
         creator_id=creator.id,
         title=draft.title.strip(),
         slug=unique_slug(db, draft.title),

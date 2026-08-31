@@ -4,8 +4,8 @@ Prompt templates and model notes, versioned with the code that uses them.
 
 ## Layout
 
-- `prompts/campaign_analysis.md` — campaign proposal analysis (Gemma)
-- `prompts/community_insights.md` — community intelligence summary (Gemma)
+- `prompts/campaign_analysis.md` — campaign proposal analysis
+- `prompts/community_insights.md` — community intelligence summary
 
 Both are loaded at runtime by `backend/app/services/ai_service.py`, which parses
 the `## SYSTEM` and `## USER` sections. Editing a prompt does not require a code
@@ -28,8 +28,13 @@ control.
 
 | Purpose | Model | Provider switch |
 |---|---|---|
-| Analysis and summarisation | Gemma, via any OpenAI-compatible endpoint | `AI_PROVIDER=gemma` |
+| Analysis and summarisation | Any NVIDIA NIM chat model (default `nvidia/nemotron-3-super-120b-a12b`) | `AI_PROVIDER=nvidia` |
+| Analysis and summarisation | Gemma, or any other OpenAI-compatible endpoint | `AI_PROVIDER=gemma` |
 | Sentiment | `cardiffnlp/twitter-xlm-roberta-base-sentiment` | `SENTIMENT_PROVIDER=xlm-roberta` |
+
+Both LLM switches share one client (`OpenAICompatibleProvider`); they differ only
+in endpoint, key, model and JSON-mode handling. The prompts are provider-neutral,
+so swapping models is an env change.
 
 With the `mock` defaults, a heuristic analyst and a lexicon-and-negation
 classifier run instead. Both read the actual text — two different campaigns get

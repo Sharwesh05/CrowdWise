@@ -29,14 +29,17 @@ Open two browser profiles side by side (or a laptop and a phone):
 Accounts (`Demo@12345` for all): `admin@example.com`, `creator@example.com`,
 `contributor@example.com`.
 
-> **Tip:** the seed already contains a fully populated campaign (`CMP-101`) and an
-> open governance round (`CMP-104`). If you are short on time, skip to Scene 8
-> using `CMP-101`, or to Scene 16 using `CMP-104`.
+> **Tip:** the seed already contains a fully populated campaign and an open
+> governance round. Campaign ids are derived from the title (`CMP-N2R6YW`), so
+> `seed.py` prints the id of every campaign it creates — keep that output on
+> screen. If you are short on time, skip to Scene 8 using the funded campaign, or
+> to Scene 16 using the one with the open governance round.
 
 > **Re-running the demo with `BLOCKCHAIN_PROVIDER=web3`:** restart the Hardhat
 > node whenever you reset the database. Campaign references are derived
-> deterministically from the public id, so a fresh `CMP-105` against a chain that
-> still holds the previous run reverts with `CampaignExists` — the contract
+> deterministically from the public id, and the public id is derived from the
+> title, so re-seeding the same titles against a chain that still holds the
+> previous run reverts with `CampaignExists` — the contract
 > correctly refusing to register the same reference twice. Restarting the node
 > clears its in-memory state. With the default `BLOCKCHAIN_PROVIDER=mock` this
 > does not arise.
@@ -230,7 +233,7 @@ top concerns, recommendations and a risk signal.
 ## Scene 15 — End the campaign
 
 **Window A** as admin → `/admin/dashboard` → **Demo controls** →
-*Simulate deadline reached* → campaign ID `CMP-104` (the seeded under-funded one,
+*Simulate deadline reached* → the id of the seeded under-funded campaign (
 or your own).
 
 The campaign completes below target and moves to **GOVERNANCE**.
@@ -276,9 +279,9 @@ extends the deadline and reopens funding. Either way, the decision is anchored.
 
 | To show | Do this |
 |---|---|
-| A funded campaign with sentiment | Open `CMP-101` |
-| An open governance round | Open `CMP-104` |
-| The admin review queue | `CMP-103` is waiting for a decision |
+| A funded campaign with sentiment | Open the funded campaign from the seed output |
+| An open governance round | Open the campaign the seed reports as `GOVERNANCE` |
+| The admin review queue | The seed leaves one campaign `PENDING_REVIEW` |
 | Chain-failure handling | Stop the Hardhat node, contribute, watch it stay verified with a pending anchor, then retry |
 | Webhook idempotency | `cd backend && pytest tests/test_payments.py -q` |
 

@@ -208,7 +208,7 @@ export default function HomePage() {
                 analysis and a human reviewer standing between an idea and a public campaign.
               </p>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <Link href="/register?role=CREATOR">
                 <Button size="lg" className="bg-white text-ink hover:bg-white/90">
                   Start a campaign

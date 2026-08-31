@@ -125,7 +125,7 @@ function DashboardContent() {
           )}
 
           <Card className="mt-6">
-            <CardHeader className="flex-row items-center justify-between">
+            <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
               <CardTitle>Recent contributions</CardTitle>
               <Link
                 href="/contributor/contributions"
@@ -164,7 +164,7 @@ function DashboardContent() {
               <CardContent>
                 <ul className="divide-y divide-surface-border">
                   {data!.past_votes.map((vote) => (
-                    <li key={vote.id} className="flex items-center justify-between py-3">
+                    <li key={vote.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium text-ink">
                           {vote.campaign_title ?? vote.campaign_public_id}

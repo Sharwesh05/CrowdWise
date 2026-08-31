@@ -1,8 +1,9 @@
 "use client";
 
-import { AlertTriangle, Brain, CheckCircle2, HelpCircle, Info, Lightbulb } from "lucide-react";
+import { AlertTriangle, Brain, CheckCircle2, HelpCircle, Info, Lightbulb, RefreshCw } from "lucide-react";
 
-import { Badge, Card, CardContent, CardHeader, CardTitle, EmptyState } from "@/components/ui";
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, useToast } from "@/components/ui";
+import { useRefreshAnalysis } from "@/hooks";
 import { cn, riskTone, scoreToWidth } from "@/lib/utils";
 import type { AIAnalysis } from "@/types";
 
@@ -71,18 +72,60 @@ function List({
 export function AIAnalysisPanel({
   analysis,
   showQuestions = false,
+  publicId,
+  canRefresh = false,
 }: {
   analysis: AIAnalysis | null;
   showQuestions?: boolean;
+  /** Required for the refresh control; without it the button is not rendered. */
+  publicId?: string;
+  canRefresh?: boolean;
 }) {
+  const refresh = useRefreshAnalysis(publicId ?? "");
+  const { notify } = useToast();
+  const showRefresh = canRefresh && Boolean(publicId);
+
+  const handleRefresh = async () => {
+    try {
+      const result = await refresh.mutateAsync();
+      notify({
+        title: result.status === "DEGRADED" ? "Analysis degraded" : "Analysis refreshed",
+        description:
+          result.status === "DEGRADED"
+            ? "The model was unreachable, so the heuristic analyst ran instead."
+            : `Re-analysed by ${result.model}.`,
+        tone: result.status === "DEGRADED" ? "info" : "positive",
+      });
+    } catch {
+      notify({
+        title: "Could not refresh the analysis",
+        description: "The previous analysis is unchanged. Try again in a moment.",
+        tone: "critical",
+      });
+    }
+  };
+
+  const refreshButton = showRefresh ? (
+    <Button
+      size="sm"
+      variant="outline"
+      loading={refresh.isPending}
+      onClick={handleRefresh}
+      leadingIcon={<RefreshCw className="h-3.5 w-3.5" />}
+    >
+      {refresh.isPending ? "Analysing…" : "Re-run"}
+    </Button>
+  ) : null;
+
   if (!analysis) {
     return (
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-row items-start justify-between gap-3">
           <CardTitle className="flex items-center gap-2">
             <Brain className="h-4 w-4 text-accent-600" aria-hidden />
             AI campaign analysis
           </CardTitle>
+          {refreshButton}
         </CardHeader>
         <CardContent>
           <EmptyState
@@ -101,11 +144,12 @@ export function AIAnalysisPanel({
           <Brain className="h-4 w-4 text-accent-600" aria-hidden />
           AI campaign analysis
         </CardTitle>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {analysis.status === "DEGRADED" && (
             <Badge tone="caution">Fallback analysis</Badge>
           )}
           <Badge className={riskTone(analysis.risk_level)}>{analysis.risk_level} risk</Badge>
+          {refreshButton}
         </div>
       </CardHeader>
 

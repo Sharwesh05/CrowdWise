@@ -53,6 +53,12 @@ export function ContributeDialog({
   const [order, setOrder] = useState<OrderResponse | null>(null);
   const [progress, setProgress] = useState<VerificationProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Our Dialog is a native <dialog> opened with showModal(), which lives in the
+  // browser's top layer. Razorpay's checkout is an ordinary div in document.body,
+  // so it can never paint above us no matter its z-index — its UPI QR ends up
+  // behind our panel. Stepping our dialog aside while their sheet is open is the
+  // only fix; a z-index cannot cross the top layer boundary.
+  const [checkoutSheetOpen, setCheckoutSheetOpen] = useState(false);
 
   const createOrder = useCreateContribution(campaign.public_id);
   const simulate = useSimulatePayment();
@@ -68,6 +74,7 @@ export function ContributeDialog({
 
   const reset = () => {
     setStage("amount");
+    setCheckoutSheetOpen(false);
     setOrder(null);
     setProgress(null);
     setError(null);
@@ -114,6 +121,7 @@ export function ContributeDialog({
       prefill: { name: user?.name, email: user?.email },
       theme: { color: "#059669" },
       handler: async (response: Record<string, string>) => {
+        setCheckoutSheetOpen(false);
         setStage("progress");
         try {
           // This is only a claim from the browser. The server verifies the
@@ -133,9 +141,13 @@ export function ContributeDialog({
         }
       },
       modal: {
-        ondismiss: () => setStage("amount"),
+        ondismiss: () => {
+          setCheckoutSheetOpen(false);
+          setStage("amount");
+        },
       },
     });
+    setCheckoutSheetOpen(true);
     checkout.open();
   };
 
@@ -154,7 +166,7 @@ export function ContributeDialog({
 
   return (
     <Dialog
-      open={open}
+      open={open && !checkoutSheetOpen}
       onClose={close}
       title={stage === "progress" ? "Processing your contribution" : `Contribute to ${campaign.title}`}
       description={

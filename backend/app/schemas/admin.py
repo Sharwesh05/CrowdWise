@@ -8,7 +8,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.schemas.campaign import AIAnalysisResponse, ApplicationResponse, CampaignSummary
+from app.schemas.campaign import (
+    AIAnalysisResponse,
+    ApplicationResponse,
+    CampaignSummary,
+    SentimentSummary,
+)
 from app.schemas.common import ORMModel
 
 
@@ -57,6 +62,9 @@ class AdminCampaignReview(BaseModel):
     application_fee_paid: bool
     application_fee_webhook_verified: bool
     analysis: AIAnalysisResponse | None = None
+    # The community signal belongs on the decision screen too: an admin
+    # approving a campaign should not have to leave the queue to see it.
+    sentiment: SentimentSummary | None = None
     risk_indicators: list[str] = Field(default_factory=list)
     recommended_questions: list[str] = Field(default_factory=list)
     documents: list[DocumentResponse] = Field(default_factory=list)

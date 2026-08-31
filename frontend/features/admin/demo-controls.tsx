@@ -75,7 +75,7 @@ export function DemoControls() {
   return (
     <Card className="border-caution/40 bg-caution-soft/20">
       <CardHeader>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 text-caution-strong" aria-hidden />
             Demo controls
@@ -101,11 +101,11 @@ export function DemoControls() {
         </Field>
 
         {selected.needs === "campaign" && (
-          <Field label="Campaign ID" htmlFor="demo-campaign" hint="For example CMP-101">
+          <Field label="Campaign ID" htmlFor="demo-campaign" hint="For example CMP-7QF2KD">
             <Input
               value={campaign}
               onChange={(event) => setCampaign(event.target.value.toUpperCase())}
-              placeholder="CMP-101"
+              placeholder="CMP-7QF2KD"
             />
           </Field>
         )}

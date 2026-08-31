@@ -3,6 +3,12 @@
 .env.*
 !.env.example
 
+# Local TLS material for the HTTPS demo proxy. Generated per machine by the
+# openssl command in infrastructure/caddy/Caddyfile — a private key never
+# belongs in the repository, even a throwaway self-signed one.
+infrastructure/caddy/tls.key
+infrastructure/caddy/tls.crt
+
 # Python
 __pycache__/
 *.py[cod]

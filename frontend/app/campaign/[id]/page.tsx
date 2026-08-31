@@ -29,6 +29,7 @@ import {
   Tabs,
 } from "@/components/ui";
 import { AIAnalysisPanel } from "@/features/campaign/ai-analysis-panel";
+import { UpdatesPanel } from "@/features/campaign/updates-panel";
 import { BlockchainPanel } from "@/features/campaign/blockchain-panel";
 import {
   CommunityInsightsPanel,
@@ -100,7 +101,7 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
           </div>
 
           <div className="mt-4 grid gap-8 lg:grid-cols-3">
-            <div className="lg:col-span-2">
+            <div className="min-w-0 lg:col-span-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone="brand">
                   {CATEGORY_LABELS[campaign.category] ?? campaign.category}
@@ -144,7 +145,7 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
             </div>
 
             {/* Funding panel */}
-            <aside className="lg:col-span-1">
+            <aside className="min-w-0 lg:col-span-1">
               <Card className="lg:sticky lg:top-24">
                 <CardContent className="space-y-5 p-5">
                   <div>
@@ -260,12 +261,13 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
       </div>
 
       <div className="container-page grid gap-8 py-8 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
           <GovernancePanel publicId={campaign.public_id} />
 
           <Tabs
             tabs={[
               { id: "about", label: "About" },
+              { id: "updates", label: "Updates", count: campaign.update_count },
               { id: "insights", label: "AI insights" },
               { id: "community", label: "Community", count: campaign.sentiment?.feedback_count },
               { id: "chain", label: "Verification" },
@@ -346,9 +348,20 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
             </div>
           )}
 
+          {tab === "updates" && (
+            <UpdatesPanel
+              publicId={campaign.public_id}
+              canPost={Boolean(user && (isCreator || user.role === "ADMIN"))}
+            />
+          )}
+
           {tab === "insights" && (
             <div className="space-y-6">
-              <AIAnalysisPanel analysis={campaign.analysis} />
+              <AIAnalysisPanel
+                analysis={campaign.analysis}
+                publicId={campaign.public_id}
+                canRefresh={Boolean(user && (isCreator || user.role === "ADMIN"))}
+              />
               <CommunityInsightsPanel
                 publicId={campaign.public_id}
                 canRefresh={Boolean(user && (isCreator || user.role === "ADMIN"))}
@@ -358,7 +371,11 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
 
           {tab === "community" && (
             <div className="space-y-6">
-              <SentimentPanel sentiment={campaign.sentiment} />
+              <SentimentPanel
+                sentiment={campaign.sentiment}
+                publicId={campaign.public_id}
+                canRefresh={Boolean(user && (isCreator || user.role === "ADMIN"))}
+              />
               <div>
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="text-base font-semibold text-ink">Contributor feedback</h3>
@@ -377,7 +394,7 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
         </div>
 
         {/* Sidebar */}
-        <aside className="space-y-6">
+        <aside className="min-w-0 space-y-6">
           {campaign.health && (
             <Card>
               <CardHeader>

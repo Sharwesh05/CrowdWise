@@ -234,7 +234,7 @@ Key modelling decisions:
 - **Money** is `Numeric(14, 2)` in rupees. Paise integers exist only at the Razorpay
   boundary. This avoids float drift and avoids leaking a payment-gateway detail into
   the domain model.
-- **`campaigns.public_id`** (`CMP-124`) is the stable external identifier used in
+- **`campaigns.public_id`** (`CMP-N2R6YW`, a Crockford-base32 digest of the title) is the stable external identifier used in
   public URLs, QR payloads, and as the on-chain campaign reference. Internal integer
   ids never appear in public URLs.
 - **`payments` is separate from `contributions`.** A payment is a gateway fact; a

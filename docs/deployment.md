@@ -47,7 +47,7 @@ Everything comes from the environment. `.env.example` is the complete list.
 |---|---|---|
 | `DEMO_MODE` | `true` | `false` |
 | `PAYMENT_PROVIDER` | `demo` | `razorpay` |
-| `AI_PROVIDER` | `mock` | `gemma` |
+| `AI_PROVIDER` | `mock` | `nvidia` (or `gemma`) |
 | `SENTIMENT_PROVIDER` | `mock` | `xlm-roberta` |
 | `BLOCKCHAIN_PROVIDER` | `mock` | `web3` |
 | `STORAGE_PROVIDER` | `local` | `s3` |
@@ -111,15 +111,33 @@ other people's funds.
 ### 3. AI
 
 ```
-AI_PROVIDER=gemma
-GEMMA_BASE_URL=https://your-gateway/v1
-GEMMA_API_KEY=<key>
-GEMMA_MODEL=gemma3:4b
+AI_PROVIDER=nvidia
+NVIDIA_API_KEY=nvapi-<key>
+NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 ```
 
-Any OpenAI-compatible endpoint works — Ollama, vLLM, or a hosted gateway. The
-provider retries once and then degrades to the heuristic analyst, marking the
-record `DEGRADED` rather than failing the request.
+`nvidia` targets NVIDIA NIM: the hosted gateway above, or a self-hosted NIM
+container reached by pointing `NVIDIA_BASE_URL` at it (no key needed then).
+
+Being listed by `GET /v1/models` does not mean your key is entitled to run a
+model — an un-entitled id returns 404. Verify before a demo:
+
+```bash
+curl -s -H "Authorization: Bearer $NVIDIA_API_KEY" \
+  https://integrate.api.nvidia.com/v1/models | jq -r '.data[].id'
+```
+
+Leave `NVIDIA_MAX_TOKENS` and `NVIDIA_TEMPERATURE` unset unless you need them;
+the request is model + messages only by default.
+`AI_PROVIDER=nvidia` without `NVIDIA_API_KEY` fails the production safety check
+rather than silently running on the heuristic analyst.
+
+For any other OpenAI-compatible endpoint — Ollama, vLLM, a hosted gateway — use
+`AI_PROVIDER=gemma` with `GEMMA_BASE_URL` / `GEMMA_API_KEY` / `GEMMA_MODEL`.
+
+Either way the provider retries once and then degrades to the heuristic analyst,
+marking the record `DEGRADED` rather than failing the request.
 
 For sentiment, `SENTIMENT_PROVIDER=xlm-roberta` needs `transformers` and `torch`
 in the image. The model loads lazily and once. On CPU it is comfortably fast

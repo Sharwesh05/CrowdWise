@@ -19,6 +19,10 @@
   body {
     @apply bg-surface-subtle text-ink antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    /* Campaign ids, tx hashes and URLs are long unbroken strings — they must
+       wrap rather than widen the page on a phone. */
+    overflow-wrap: break-word;
+    -webkit-tap-highlight-color: transparent;
   }
 
   /* Visible focus for every interactive element — keyboard users get the same
@@ -86,6 +90,19 @@
 
   .prose-campaign p:last-child {
     @apply mb-0;
+  }
+}
+
+@layer utilities {
+  /* Horizontal scrollers (tab strips, tables) keep their gesture but lose the
+     scrollbar, which otherwise steals a row of height on mobile. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }
 

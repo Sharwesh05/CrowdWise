@@ -16,11 +16,11 @@ CrowdWise is **not** "campaign → payment → money raised". It is a full lifec
 
 ```
 Creator → Register → Demo KYC → ₹500 Application Fee → Campaign Submission
-       → AI Campaign Analysis (Gemma) → Admin Review → Approval → LIVE
+       → AI Campaign Analysis (NVIDIA NIM) → Admin Review → Approval → LIVE
        → Unique Campaign QR → Physical/Online Discovery → Campaign Page
        → Feedback / Rating → Razorpay Contribution → Server-side Verification
        → PostgreSQL Contribution Record → Blockchain Contribution Record
-       → Sentiment (XLM-RoBERTa) + Aspect Analysis → Gemma Community Intelligence
+       → Sentiment (XLM-RoBERTa) + Aspect Analysis → LLM Community Intelligence
        → Deadline → TARGET_MET / TARGET_MISSED → Predefined Outcome
        → Contributor Governance → Blockchain Vote Record → Final Outcome
 ```
@@ -68,7 +68,7 @@ These rules shape every design decision in the repo. Do not violate them.
 | Backend | Python + FastAPI + SQLAlchemy 2.x + Alembic + Pydantic v2 |
 | Database | PostgreSQL (SQLite only as a zero-infra dev/test fallback) |
 | Payments | Razorpay (Test Mode) + webhook signature verification |
-| LLM | Gemma (provider-pluggable via env) |
+| LLM | NVIDIA NIM (provider-pluggable via env; any OpenAI-compatible endpoint) |
 | Sentiment | XLM-RoBERTa multilingual (provider-pluggable via env) |
 | Blockchain | Solidity + Hardhat + web3.py, local Hardhat node by default |
 | Storage | S3-compatible abstraction (local disk driver for dev) |
@@ -112,7 +112,7 @@ crowdwise/
 │
 ├── ai/                   prompt templates + model notes (shared, versioned)
 ├── infrastructure/docker/
-├── docs/                 architecture.md, api.md, demo.md, deployment.md
+├── docs/                 architecture.md, api.md, demo.md, deployment.md, runbook.md
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -132,7 +132,7 @@ validate, authorize, delegate, serialize.
 | `campaign_service` | CRUD, state transitions, health score |
 | `campaign_state` | explicit allowed-transition map |
 | `payment_service` | payment provider interface, Razorpay + demo impls, order creation, signature verification, webhook handling, refunds |
-| `ai_service` | `CampaignAnalysisProvider` interface, `GemmaProvider`, `MockAnalysisProvider`, community insights |
+| `ai_service` | `CampaignAnalysisProvider` interface, `OpenAICompatibleProvider` (`NvidiaProvider`, `GemmaProvider`), `MockAnalysisProvider`, community insights |
 | `sentiment_service` | `SentimentProvider` interface, `XLMRobertaProvider`, `MockSentimentProvider`, aspect classification |
 | `blockchain_service` | web3.py contract calls, tx persistence, retry queue, mock chain |
 | `governance_service` | eligibility, vote casting, tally, close, outcome |
@@ -165,7 +165,7 @@ Full list lives in `.env.example`. Key provider switches:
 
 ```
 DEMO_MODE=true                # simulated KYC, seeded demo data, admin demo controls
-AI_PROVIDER=mock|gemma
+AI_PROVIDER=mock|nvidia|gemma
 SENTIMENT_PROVIDER=mock|xlm-roberta
 PAYMENT_PROVIDER=demo|razorpay
 BLOCKCHAIN_PROVIDER=mock|web3
@@ -190,7 +190,7 @@ Without Docker (this dev machine has none):
 
 ```bash
 # backend
-cd backend && ../.venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000
+cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8000
 # frontend
 cd frontend && npm run dev
 # blockchain
@@ -211,7 +211,8 @@ Demo accounts (seeded, local only): `admin@example.com`, `creator@example.com`,
   at the Razorpay boundary inside `payment_service`. Convert at the boundary, never
   in routers or the frontend.
 - **IDs:** integer PKs internally; campaigns also carry a human `public_id`
-  (`CMP-124`) used in public URLs and as the on-chain campaign reference.
+  (`CMP-N2R6YW`, derived from the title) used in public URLs and as the
+  on-chain campaign reference.
 - **Errors:** services raise `AppError` subclasses; a FastAPI exception handler maps
   them to `{"error": {"code", "message", "details"}}`.
 - **Frontend:** server components for static shells, client components for
@@ -230,7 +231,7 @@ Demo accounts (seeded, local only): `admin@example.com`, `creator@example.com`,
 4. Public campaign, QR, discovery, contributor dashboard
 5. Razorpay: order → checkout → webhook → verification → contribution
 6. Blockchain: Hardhat, Solidity, contribution record, tx tracking
-7. Feedback → sentiment → aspects → community insights → Gemma summary
+7. Feedback → sentiment → aspects → community insights → LLM summary
 8. Governance: deadline → target missed → voting → chain result → refund/continue
 9. Polish: dashboards, responsive UI, error/loading states, security, tests, docs
 
@@ -267,7 +268,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 - [x] Campaign state machine
 - [x] Campaign CRUD + application
 - [x] ₹500 application fee order + verification
-- [x] AI analysis service (mock + gemma) + routes
+- [x] AI analysis service (mock + nvidia/gemma) + routes
 - [x] Admin review routes (approve / reject / request-changes)
 
 ### Phase 4 — Public + QR
@@ -288,7 +289,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 ### Phase 7 — Community intelligence
 - [x] Feedback routes
 - [x] Sentiment providers + aspect classification
-- [x] Community insights (Gemma) + caching
+- [x] Community insights (LLM) + caching
 
 ### Phase 8 — Governance
 - [x] Outcome configuration
@@ -312,7 +313,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 >
 > | Suite | Result | Command |
 > |---|---|---|
-> | Backend | 82 passing | `cd backend && .venv/Scripts/python.exe -m pytest tests/ -q` |
+> | Backend | 82 passing | `cd backend && .venv/bin/python -m pytest tests/ -q` |
 > | Smart contract | 22 passing | `cd blockchain && npx hardhat test` |
 > | Frontend | 11 passing | `cd frontend && npx vitest run` |
 > | Frontend build | 20 routes | `cd frontend && npm run build` |
@@ -340,7 +341,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 - [x] Backend tests (auth, lifecycle, payments, webhook idempotency, governance)
 - [x] Blockchain tests
 - [x] Frontend tests
-- [x] `docs/api.md`, `docs/demo.md`, `docs/deployment.md`
+- [x] `docs/api.md`, `docs/demo.md`, `docs/deployment.md`, `docs/runbook.md`
 - [x] Final end-to-end demo verification
 
 ---
@@ -352,7 +353,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 - **No local PostgreSQL server.** `DATABASE_URL` defaults to Postgres for Docker, but
   `sqlite+pysqlite:///./crowdwise.db` is supported for zero-infra local runs and is
   what the test suite uses. All models stay Postgres-compatible (no SQLite-only types).
-- Python 3.14 on Windows; heavyweight ML wheels (`transformers`, `torch`) are not
+- Heavyweight ML wheels (`transformers`, `torch`) are not
   installed — `SENTIMENT_PROVIDER=mock` is the default, and the XLM-RoBERTa provider
   is implemented behind the same interface with a lazy import so it activates the
   moment the wheels are present.

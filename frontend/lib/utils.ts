@@ -90,7 +90,7 @@ export function parseCampaignReference(input: string): string | null {
   const urlMatch = value.match(/\/campaign\/([A-Za-z0-9-]+)/);
   if (urlMatch) return urlMatch[1];
 
-  if (/^CMP-\d+$/i.test(value)) return value.toUpperCase();
+  if (/^CMP-[A-Z0-9]+$/i.test(value)) return value.toUpperCase();
 
   // A bare slug or id is still worth trying against the API.
   if (/^[A-Za-z0-9-]+$/.test(value)) return value;

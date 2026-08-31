@@ -25,10 +25,16 @@ import {
   EmptyState,
   Skeleton,
   StarRating,
+  useToast,
 } from "@/components/ui";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { SENTIMENT_META, cn } from "@/lib/utils";
-import { useCampaignFeedback, useCommunityInsights, useRefreshInsights } from "@/hooks";
+import {
+  useCampaignFeedback,
+  useCommunityInsights,
+  useRefreshInsights,
+  useRefreshSentiment,
+} from "@/hooks";
 import type { CommunityInsight, SentimentSummary } from "@/types";
 
 const SENTIMENT_COLORS = {
@@ -37,12 +43,59 @@ const SENTIMENT_COLORS = {
   negative: "#DC2626",
 };
 
-export function SentimentPanel({ sentiment }: { sentiment: SentimentSummary | null }) {
+export function SentimentPanel({
+  sentiment,
+  publicId,
+  canRefresh = false,
+}: {
+  sentiment: SentimentSummary | null;
+  /** Required for the refresh control; without it the button is not rendered. */
+  publicId?: string;
+  canRefresh?: boolean;
+}) {
+  const refresh = useRefreshSentiment(publicId ?? "");
+  const { notify } = useToast();
+
+  const handleRefresh = async () => {
+    try {
+      const result = await refresh.mutateAsync();
+      const outstanding = result.feedback_count - result.analyzed_count;
+      notify({
+        title: "Sentiment refreshed",
+        description:
+          outstanding > 0
+            ? `${result.analyzed_count} of ${result.feedback_count} classified; ${outstanding} still failing.`
+            : `All ${result.feedback_count} comments classified.`,
+        tone: outstanding > 0 ? "info" : "positive",
+      });
+    } catch {
+      notify({
+        title: "Could not refresh sentiment",
+        description: "The existing classification is unchanged.",
+        tone: "critical",
+      });
+    }
+  };
+
+  const refreshButton =
+    canRefresh && publicId ? (
+      <Button
+        size="sm"
+        variant="outline"
+        loading={refresh.isPending}
+        onClick={handleRefresh}
+        leadingIcon={<RefreshCw className="h-3.5 w-3.5" />}
+      >
+        {refresh.isPending ? "Classifying…" : "Re-classify"}
+      </Button>
+    ) : null;
+
   if (!sentiment || sentiment.feedback_count === 0) {
     return (
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
           <CardTitle>Community sentiment</CardTitle>
+          {refreshButton}
         </CardHeader>
         <CardContent>
           <EmptyState
@@ -68,7 +121,7 @@ export function SentimentPanel({ sentiment }: { sentiment: SentimentSummary | nu
 
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
         <div>
           <CardTitle>Community sentiment</CardTitle>
           <p className="mt-1 text-sm text-ink-muted">
@@ -76,7 +129,10 @@ export function SentimentPanel({ sentiment }: { sentiment: SentimentSummary | nu
             average {sentiment.average_rating.toFixed(1)} / 5
           </p>
         </div>
-        <StarRating value={sentiment.average_rating} readOnly size={16} />
+        <div className="flex flex-wrap items-center gap-3">
+          <StarRating value={sentiment.average_rating} readOnly size={16} />
+          {refreshButton}
+        </div>
       </CardHeader>
 
       <CardContent className="space-y-6">
@@ -234,7 +290,7 @@ function InsightBody({
 
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
         <div>
           <CardTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-accent-600" aria-hidden />
@@ -382,7 +438,7 @@ export function FeedbackList({ publicId }: { publicId: string }) {
       })}
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between pt-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
           <p className="text-xs text-ink-muted">
             Page {page + 1} of {totalPages} · {data.total} total
           </p>

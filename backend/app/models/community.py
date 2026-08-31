@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Float,
     ForeignKey,
     Index,
@@ -114,6 +115,45 @@ class Feedback(Base):
     )
 
 
+class CampaignUpdate(Base):
+    """A progress post written by the campaign creator.
+
+    Separate from Feedback, which flows the other way: feedback is contributors
+    talking to the creator and is scored for sentiment. An update is the creator
+    talking to the community — outreach, milestones, setbacks — and is never fed
+    to a model or scored, because it is not evidence about the campaign, it is
+    the campaign speaking.
+    """
+
+    __tablename__ = "campaign_updates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    # The author is recorded even though it is normally the campaign owner: an
+    # admin can post on a creator's behalf, and the audit trail must say who did.
+    author_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(140), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Pinning lets a creator keep the one update that matters at the top without
+    # editing history or reposting.
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utcnow, index=True, nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    campaign: Mapped["Campaign"] = relationship(back_populates="updates")
+    author: Mapped["User | None"] = relationship()
+
+    __table_args__ = (
+        Index("ix_campaign_updates_campaign_created", "campaign_id", "created_at"),
+    )
+
+
 class AICommunityInsight(Base):
     """Cached community intelligence: aggregates in, one LLM call out."""
 
@@ -135,7 +175,9 @@ class AICommunityInsight(Base):
     community_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     recommendations: Mapped[list | None] = mapped_column(JSON, nullable=True)
     questions_from_community: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    risk_change: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Text, not String(200): this is model-authored prose sharing a validator
+    # with community_summary, and a real LLM overruns 200 chars routinely.
+    risk_change: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     model: Mapped[str] = mapped_column(String(80), nullable=False)
     provider: Mapped[str] = mapped_column(String(30), default="mock", nullable=False)

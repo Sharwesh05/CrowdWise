@@ -17,7 +17,12 @@ from app.core.db import utcnow
 from app.core.enums import ASPECT_LABELS, BlockchainRecordType, ContributionStatus
 from app.models.campaign import Campaign
 from app.models.chain import BlockchainTransaction
-from app.models.community import AIAnalysis, AICommunityInsight, Feedback
+from app.models.community import (
+    AIAnalysis,
+    AICommunityInsight,
+    CampaignUpdate,
+    Feedback,
+)
 from app.models.payment import Contribution
 from app.schemas.campaign import (
     AIAnalysisResponse,
@@ -25,6 +30,7 @@ from app.schemas.campaign import (
     BlockchainSummary,
     CampaignEventResponse,
     CampaignSummary,
+    CampaignUpdateResponse,
     CommunityInsightResponse,
     CreatorCampaign,
     CreatorSummary,
@@ -48,6 +54,7 @@ from app.services import (
     campaign_state,
     qr_service,
     sentiment_service,
+    update_service,
 )
 
 
@@ -218,6 +225,7 @@ def public_campaign(db: Session, campaign: Campaign) -> PublicCampaign:
         outcome_rules=outcome_rules(campaign),
         analysis=analysis_response(ai_service.latest_analysis(db, campaign.id)),
         sentiment=sentiment_summary(db, campaign.id),
+        update_count=update_service.count_updates(db, campaign.id),
         insights=insight_response(ai_service.latest_insight(db, campaign.id)),
         health=health_response(db, campaign),
         blockchain=blockchain_summary(db, campaign),
@@ -258,6 +266,21 @@ def feedback_response(feedback: Feedback, *, include_author: bool = False) -> Fe
         # calls for it. Author identity never leaves the database otherwise.
         author_name=(feedback.contributor.name if include_author and feedback.contributor else None),
         created_at=feedback.created_at,
+    )
+
+
+def campaign_update_response(update: CampaignUpdate) -> CampaignUpdateResponse:
+    return CampaignUpdateResponse(
+        id=update.id,
+        campaign_id=update.campaign_id,
+        title=update.title,
+        body=update.body,
+        is_pinned=update.is_pinned,
+        # Updates are signed, unlike feedback: the community needs to know the
+        # creator is the one speaking.
+        author_name=update.author.name if update.author else None,
+        created_at=update.created_at,
+        updated_at=update.updated_at,
     )
 
 

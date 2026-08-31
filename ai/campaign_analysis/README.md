@@ -32,8 +32,26 @@ Scores are clamped to 0-100. `risk_score` is the one where **higher is worse**.
 
 | Class | Selected by | Behaviour |
 |---|---|---|
-| `GemmaProvider` | `AI_PROVIDER=gemma` | Calls an OpenAI-compatible endpoint, retries once, recovers JSON from prose or code fences |
+| `NvidiaProvider` | `AI_PROVIDER=nvidia` | NVIDIA NIM (hosted gateway or self-hosted) |
+| `GemmaProvider` | `AI_PROVIDER=gemma` | Any other OpenAI-compatible endpoint (Ollama, vLLM, gateway) |
 | `MockAnalysisProvider` | `AI_PROVIDER=mock` | Deterministic heuristic analyst |
+
+Both LLM providers subclass `OpenAICompatibleProvider`. It sends **model and
+messages only** — no `temperature`, `max_tokens` or `response_format` unless the
+env explicitly asks for them. Across a catalogue as wide as NIM's, every extra
+field is one more thing a given model can reject or mishandle; a `max_tokens`
+sized for a plain instruct model truncates a reasoning model mid-thought, before
+it emits any JSON.
+
+`NVIDIA_JSON_MODE=auto` (the default) asks plainly first and retries with
+`response_format` only if the reply could not be parsed. `on` always sends it,
+`off` never does.
+
+The client also strips `<think>` blocks, recovers JSON from prose or code fences,
+raises a named error on an empty/truncated reply, and reports a 404 as "model not
+available on this account" rather than masking it. A provider that cannot be
+constructed (missing key, bad URL) logs and falls back to the heuristic analyst
+instead of crashing the app.
 
 ## The heuristic analyst
 

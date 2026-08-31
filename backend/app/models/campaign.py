@@ -32,7 +32,12 @@ from app.core.enums import (
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.models.chain import BlockchainTransaction
-    from app.models.community import AIAnalysis, AICommunityInsight, Feedback
+    from app.models.community import (
+        AIAnalysis,
+        AICommunityInsight,
+        CampaignUpdate,
+        Feedback,
+    )
     from app.models.governance import Vote
     from app.models.payment import Contribution, Payment
     from app.models.user import User
@@ -110,6 +115,9 @@ class Campaign(Base, TimestampMixin):
         back_populates="campaign", cascade="all, delete-orphan"
     )
     feedback: Mapped[list["Feedback"]] = relationship(
+        back_populates="campaign", cascade="all, delete-orphan"
+    )
+    updates: Mapped[list["CampaignUpdate"]] = relationship(
         back_populates="campaign", cascade="all, delete-orphan"
     )
     contributions: Mapped[list["Contribution"]] = relationship(back_populates="campaign")

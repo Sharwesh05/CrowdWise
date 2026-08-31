@@ -186,6 +186,28 @@ class HealthResponse(BaseModel):
     )
 
 
+class CampaignUpdateCreateRequest(BaseModel):
+    title: str = Field(min_length=4, max_length=140)
+    body: str = Field(min_length=20, max_length=5000)
+
+
+class CampaignUpdateEditRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=4, max_length=140)
+    body: str | None = Field(default=None, min_length=20, max_length=5000)
+    is_pinned: bool | None = None
+
+
+class CampaignUpdateResponse(ORMModel):
+    id: int
+    campaign_id: int
+    title: str
+    body: str
+    is_pinned: bool
+    author_name: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
 class SentimentSummary(BaseModel):
     feedback_count: int = 0
     analyzed_count: int = 0
@@ -221,6 +243,9 @@ class PublicCampaign(CampaignSummary):
     outcome_rules: dict[str, Any] | None = None
     analysis: AIAnalysisResponse | None = None
     sentiment: SentimentSummary | None = None
+    # Count only, so the Updates tab can show a badge without the page
+    # having to fetch the list before it is opened.
+    update_count: int = 0
     insights: CommunityInsightResponse | None = None
     health: HealthResponse | None = None
     blockchain: BlockchainSummary | None = None

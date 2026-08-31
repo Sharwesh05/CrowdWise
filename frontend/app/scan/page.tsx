@@ -81,12 +81,12 @@ export default function ScanPage() {
                 <Field
                   label="Campaign link or ID"
                   htmlFor="manual-reference"
-                  hint="For example: http://localhost:3000/campaign/CMP-101 or just CMP-101"
+                  hint="For example: http://localhost:3000/campaign/CMP-7QF2KD or just CMP-7QF2KD"
                 >
                   <Input
                     value={manual}
                     onChange={(event) => setManual(event.target.value)}
-                    placeholder="CMP-101"
+                    placeholder="CMP-7QF2KD"
                   />
                 </Field>
                 <Button type="submit" className="w-full" leadingIcon={<Link2 className="h-4 w-4" />}>
@@ -135,10 +135,26 @@ function CameraScanner({
 
   const start = async () => {
     onError(null);
+
+    // Browsers expose getUserMedia only in a secure context. Over plain HTTP on
+    // a LAN address — exactly how a phone reaches a laptop during a demo —
+    // navigator.mediaDevices is undefined and the generic "could not start"
+    // message sends people hunting for a permission prompt that never appears.
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      onError(
+        window.isSecureContext === false
+          ? `The camera needs a secure connection. This page is on ${window.location.protocol}//${window.location.host}, and browsers only allow camera access over HTTPS or on localhost. Use the "Upload image" or "Enter link" tab instead.`
+          : "This browser does not expose a camera API. Use the upload or link tab instead.",
+      );
+      return;
+    }
+
     try {
       // Imported on demand so the scanner bundle never loads for users who
       // never open this tab.
       const { Html5Qrcode } = await import("html5-qrcode");
+      const host = document.getElementById(containerId);
+      if (!host) throw new Error("scanner container is not mounted");
       const scanner = new Html5Qrcode(containerId);
       scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
       setScanning(true);
@@ -155,22 +171,30 @@ function CameraScanner({
       );
     } catch (caught) {
       setScanning(false);
+      const name = caught instanceof Error ? caught.name : "";
       onError(
-        caught instanceof Error && caught.name === "NotAllowedError"
-          ? "Camera permission was denied. Use the upload or link tab instead."
-          : "Could not start the camera. Use the upload or link tab instead.",
+        name === "NotAllowedError"
+          ? "Camera permission was denied. Allow it in your browser's site settings, or use the upload or link tab."
+          : name === "NotFoundError" || name === "OverconstrainedError"
+            ? "No rear-facing camera was found on this device. Use the upload or link tab instead."
+            : name === "NotReadableError"
+              ? "The camera is already in use by another app or tab. Close it and try again."
+              : "Could not start the camera. Use the upload or link tab instead.",
       );
     }
   };
 
   return (
     <div className="space-y-4">
-      <div
-        id={containerId}
-        className="aspect-square w-full overflow-hidden rounded-lg border border-surface-border bg-surface-muted"
-      >
+      {/* html5-qrcode takes exclusive ownership of #containerId and clears its
+          children when it starts. React must therefore never render children
+          into it: doing so makes React try to remove a node the library has
+          already removed, which throws NotFoundError and trips the error
+          boundary. The placeholder is a sibling overlay instead. */}
+      <div className="relative aspect-square w-full overflow-hidden rounded-lg border border-surface-border bg-surface-muted">
+        <div id={containerId} className="h-full w-full" />
         {!scanning && (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-ink-faint">
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-faint">
             <CameraOff className="h-8 w-8" aria-hidden />
             <p className="text-sm">Camera is off</p>
           </div>

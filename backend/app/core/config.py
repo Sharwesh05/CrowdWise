@@ -60,15 +60,33 @@ class Settings(BaseSettings):
     currency: str = "INR"
 
     # ---------- AI ----------
-    ai_provider: Literal["mock", "gemma"] = "mock"
+    # Every option below speaks the same OpenAI-compatible chat API; only the
+    # endpoint, key and model differ. `nvidia` targets NVIDIA NIM (the hosted
+    # build.nvidia.com gateway by default, or a self-hosted NIM container).
+    ai_provider: Literal["mock", "gemma", "nvidia"] = "mock"
     gemma_provider: str = "openai_compatible"
     gemma_base_url: str = "http://localhost:11434/v1"
     gemma_api_key: str = ""
     gemma_model: str = "gemma3:4b"
     gemma_timeout_seconds: int = 60
 
+    # ---------- AI: NVIDIA NIM ----------
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_api_key: str = ""
+    nvidia_model: str = "deepseek-ai/deepseek-v4-pro-0813"
+    nvidia_timeout_seconds: int = 90
+    # The request body is model + messages only unless you opt into more.
+    # `auto` asks plainly first and retries with response_format only if the
+    # reply could not be parsed; `on` always sends it, `off` never does.
+    nvidia_json_mode: Literal["auto", "on", "off"] = "auto"
+    # 0 / unset omits the field. Reasoning models need no cap and are truncated
+    # mid-thought by one meant for a plain instruct model.
+    nvidia_max_tokens: int = 0
+    nvidia_temperature: float | None = None
+
     # ---------- Sentiment ----------
-    sentiment_provider: Literal["mock", "xlm-roberta"] = "mock"
+    # `nvidia` reuses the NVIDIA_* settings above and classifies in batches.
+    sentiment_provider: Literal["mock", "xlm-roberta", "nvidia"] = "mock"
     sentiment_model: str = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
     sentiment_device: str = "cpu"
     community_insight_refresh_threshold: int = 5
@@ -143,6 +161,8 @@ class Settings(BaseSettings):
             problems.append("COOKIE_SECURE must be true in production")
         if self.payment_provider == "razorpay" and not self.razorpay_webhook_secret:
             problems.append("RAZORPAY_WEBHOOK_SECRET is required")
+        if self.ai_provider == "nvidia" and not self.nvidia_api_key:
+            problems.append("NVIDIA_API_KEY is required when AI_PROVIDER=nvidia")
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))
 

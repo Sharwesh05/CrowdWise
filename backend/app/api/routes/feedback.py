@@ -8,10 +8,22 @@ from app.api import serializers
 from app.core.db import session_scope
 from app.core.deps import CSRFProtected, CurrentUser, DbSession
 from app.core.errors import NotFoundError
-from app.schemas.campaign import CommunityInsightResponse, SentimentSummary
-from app.schemas.common import Page
+from app.schemas.campaign import (
+    CampaignUpdateCreateRequest,
+    CampaignUpdateEditRequest,
+    CampaignUpdateResponse,
+    CommunityInsightResponse,
+    SentimentSummary,
+)
+from app.schemas.common import MessageResponse, Page
 from app.schemas.payment import FeedbackCreateRequest, FeedbackResponse
-from app.services import ai_service, campaign_service, feedback_service, sentiment_service
+from app.services import (
+    ai_service,
+    campaign_service,
+    feedback_service,
+    sentiment_service,
+    update_service,
+)
 
 router = APIRouter(prefix="/api/campaigns", tags=["Feedback"])
 
@@ -112,3 +124,87 @@ def refresh_community_insights(
     db.commit()
     db.refresh(insight)
     return serializers.insight_response(insight)
+
+
+# --------------------------------------------------------------------------
+# Campaign updates — the creator's side of the conversation
+# --------------------------------------------------------------------------
+@router.get("/{public_id}/updates", response_model=Page[CampaignUpdateResponse], tags=["Updates"])
+def list_updates(
+    public_id: str,
+    db: DbSession,
+    limit: int = Query(default=10, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> Page[CampaignUpdateResponse]:
+    """Public: anyone looking at the campaign can read its updates."""
+    campaign = campaign_service.get_public(db, public_id)
+    rows, total = update_service.list_updates(db, campaign.id, limit=limit, offset=offset)
+    return Page(
+        items=[serializers.campaign_update_response(u) for u in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/{public_id}/updates",
+    response_model=CampaignUpdateResponse,
+    status_code=201,
+    tags=["Updates"],
+    dependencies=[CSRFProtected],
+)
+def post_update(
+    public_id: str,
+    payload: CampaignUpdateCreateRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> CampaignUpdateResponse:
+    campaign = campaign_service.get_by_public_id(db, public_id)
+    update = update_service.create_update(db, campaign, user, payload.title, payload.body)
+    db.commit()
+    db.refresh(update)
+    return serializers.campaign_update_response(update)
+
+
+@router.patch(
+    "/{public_id}/updates/{update_id}",
+    response_model=CampaignUpdateResponse,
+    tags=["Updates"],
+    dependencies=[CSRFProtected],
+)
+def edit_update(
+    public_id: str,
+    update_id: int,
+    payload: CampaignUpdateEditRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> CampaignUpdateResponse:
+    campaign = campaign_service.get_by_public_id(db, public_id)
+    update = update_service.edit_update(
+        db,
+        campaign,
+        user,
+        update_id,
+        title=payload.title,
+        body=payload.body,
+        is_pinned=payload.is_pinned,
+    )
+    db.commit()
+    db.refresh(update)
+    return serializers.campaign_update_response(update)
+
+
+@router.delete(
+    "/{public_id}/updates/{update_id}",
+    response_model=MessageResponse,
+    tags=["Updates"],
+    dependencies=[CSRFProtected],
+)
+def delete_update(
+    public_id: str, update_id: int, user: CurrentUser, db: DbSession
+) -> MessageResponse:
+    campaign = campaign_service.get_by_public_id(db, public_id)
+    update_service.delete_update(db, campaign, user, update_id)
+    db.commit()
+    return MessageResponse(message="Update deleted.")

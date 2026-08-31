@@ -18,12 +18,14 @@ import {
 import { ApiError, api } from "@/lib/api";
 import type {
   AdminDashboard,
+  AIAnalysis,
   AdminReview,
   AuditLog,
   AuthResponse,
   BlockchainRecord,
   CampaignAnalytics,
   CampaignSummary,
+  CampaignUpdate,
   CommunityInsight,
   Contribution,
   ContributorDashboard,
@@ -35,9 +37,11 @@ import type {
   OrderResponse,
   Page,
   PlatformStats,
+  Profile,
   PublicCampaign,
   PublicContribution,
   QRResponse,
+  SentimentSummary,
   SessionUser,
   VerificationProgress,
   Vote,
@@ -62,6 +66,8 @@ export const keys = {
   contributorDashboard: ["contributor-dashboard"] as const,
   myContributions: ["my-contributions"] as const,
   myVotes: ["my-votes"] as const,
+  campaignUpdates: (id: string) => ["campaign-updates", id] as const,
+  profile: ["profile"] as const,
   adminDashboard: ["admin-dashboard"] as const,
   adminPending: ["admin-pending"] as const,
   adminCampaigns: (status: string) => ["admin-campaigns", status] as const,
@@ -269,6 +275,76 @@ export function useRefreshInsights(publicId: string) {
   });
 }
 
+export function useRefreshAnalysis(publicId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<AIAnalysis>(`/api/campaigns/${publicId}/analysis/refresh`),
+    onSuccess: () => {
+      // The analysis is embedded in the campaign payloads rather than cached on
+      // its own, so refetch whichever view is mounted.
+      queryClient.invalidateQueries({ queryKey: keys.publicCampaign(publicId) });
+      queryClient.invalidateQueries({ queryKey: keys.myCampaigns });
+      queryClient.invalidateQueries({ queryKey: keys.adminReview(publicId) });
+    },
+  });
+}
+
+export function useRefreshSentiment(publicId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<SentimentSummary>(`/api/campaigns/${publicId}/sentiment/refresh`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: keys.publicCampaign(publicId) });
+      queryClient.invalidateQueries({ queryKey: keys.insights(publicId) });
+      queryClient.invalidateQueries({ queryKey: keys.myCampaigns });
+      queryClient.invalidateQueries({ queryKey: keys.adminReview(publicId) });
+    },
+  });
+}
+
+export function useCampaignUpdates(publicId: string) {
+  return useQuery<Page<CampaignUpdate>>({
+    queryKey: keys.campaignUpdates(publicId),
+    queryFn: () => api.get<Page<CampaignUpdate>>(`/api/campaigns/${publicId}/updates?limit=50`),
+  });
+}
+
+function useUpdateMutation<TArgs>(
+  publicId: string,
+  request: (args: TArgs) => Promise<unknown>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: request,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: keys.campaignUpdates(publicId) });
+      // update_count lives on the campaign payload, so the tab badge is stale
+      // until the campaign is refetched too.
+      queryClient.invalidateQueries({ queryKey: keys.publicCampaign(publicId) });
+    },
+  });
+}
+
+export function usePostUpdate(publicId: string) {
+  return useUpdateMutation(publicId, (payload: { title: string; body: string }) =>
+    api.post<CampaignUpdate>(`/api/campaigns/${publicId}/updates`, payload),
+  );
+}
+
+export function useEditUpdate(publicId: string) {
+  return useUpdateMutation(
+    publicId,
+    ({ id, ...payload }: { id: number; title?: string; body?: string; is_pinned?: boolean }) =>
+      api.patch<CampaignUpdate>(`/api/campaigns/${publicId}/updates/${id}`, payload),
+  );
+}
+
+export function useDeleteUpdate(publicId: string) {
+  return useUpdateMutation(publicId, (id: number) =>
+    api.delete<{ message: string }>(`/api/campaigns/${publicId}/updates/${id}`),
+  );
+}
+
 export function useCampaignContributions(publicId: string) {
   return useQuery<Page<PublicContribution>>({
     queryKey: keys.campaignContributions(publicId),
@@ -443,6 +519,13 @@ export function useContributorDashboard() {
   return useQuery<ContributorDashboard>({
     queryKey: keys.contributorDashboard,
     queryFn: () => api.get<ContributorDashboard>("/api/contributor/dashboard"),
+  });
+}
+
+export function useProfile() {
+  return useQuery<Profile>({
+    queryKey: keys.profile,
+    queryFn: () => api.get<Profile>("/api/profile"),
   });
 }
 

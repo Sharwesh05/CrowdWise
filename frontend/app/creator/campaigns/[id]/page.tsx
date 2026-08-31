@@ -34,6 +34,7 @@ import { RequireRole } from "@/components/layout/require-role";
 import { AIAnalysisPanel } from "@/features/campaign/ai-analysis-panel";
 import { BlockchainPanel } from "@/features/campaign/blockchain-panel";
 import { CommunityInsightsPanel, FeedbackList, SentimentPanel } from "@/features/campaign/community-panel";
+import { UpdatesPanel } from "@/features/campaign/updates-panel";
 import { FundingChart } from "@/features/campaign/funding-chart";
 import { API_URL, ApiError } from "@/lib/api";
 import { formatCompactCurrency, formatCurrency, formatDateTime, titleCase } from "@/lib/format";
@@ -152,6 +153,7 @@ function CampaignManager({ campaignId }: { campaignId: number }) {
         tabs={[
           { id: "lifecycle", label: "Lifecycle" },
           { id: "analytics", label: "Analytics" },
+          { id: "updates", label: "Updates", count: campaign.update_count },
           { id: "community", label: "Community", count: campaign.sentiment?.feedback_count },
           { id: "qr", label: "QR & sharing" },
           { id: "chain", label: "Blockchain" },
@@ -164,9 +166,17 @@ function CampaignManager({ campaignId }: { campaignId: number }) {
       <div className="mt-6">
         {tab === "lifecycle" && <LifecyclePanel campaign={campaign} onChanged={() => refetch()} />}
         {tab === "analytics" && <AnalyticsPanel publicId={campaign.public_id} />}
+        {tab === "updates" && (
+          <UpdatesPanel publicId={campaign.public_id} canPost />
+        )}
+
         {tab === "community" && (
           <div className="space-y-6">
-            <SentimentPanel sentiment={campaign.sentiment} />
+            <SentimentPanel
+              sentiment={campaign.sentiment}
+              publicId={campaign.public_id}
+              canRefresh
+            />
             <CommunityInsightsPanel publicId={campaign.public_id} canRefresh />
             <FeedbackList publicId={campaign.public_id} />
           </div>
@@ -334,7 +344,12 @@ function LifecyclePanel({
         </CardContent>
       </Card>
 
-      <AIAnalysisPanel analysis={campaign.analysis} showQuestions />
+      <AIAnalysisPanel
+        analysis={campaign.analysis}
+        showQuestions
+        publicId={campaign.public_id}
+        canRefresh
+      />
     </div>
   );
 }
@@ -426,7 +441,10 @@ function QrPanel({
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
-      <Card className="print-card">
+      {/* min-w-0: the share panel below holds a nowrap URL, and a grid item
+          defaults to min-width:auto — without this the column grows past a
+          phone viewport instead of the URL truncating. */}
+      <Card className="min-w-0 print-card">
         <CardContent className="space-y-4 p-6 text-center">
           <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">
             Scan to support
@@ -443,7 +461,9 @@ function QrPanel({
         </CardContent>
       </Card>
 
-      <div className="no-print space-y-4">
+      <LocalhostQrWarning url={data.campaign_url} />
+
+      <div className="min-w-0 no-print space-y-4">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -522,5 +542,34 @@ function TimelinePanel({ events }: { events: import("@/types").CampaignEvent[] }
         </ol>
       </CardContent>
     </Card>
+  );
+}
+
+
+/**
+ * A QR encoding a localhost URL is unscannable by anything except this machine:
+ * a phone resolves `localhost` to itself. The QR still renders — it is correct
+ * for the configured FRONTEND_URL — so the failure is silent unless we say so.
+ */
+function LocalhostQrWarning({ url }: { url: string }) {
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") return null;
+
+  return (
+    <Alert tone="caution" className="no-print lg:col-span-2">
+      <p className="font-medium">This QR only works on this computer.</p>
+      <p className="mt-1 text-sm">
+        It encodes <code className="font-mono">{url}</code>, and a phone resolves{" "}
+        <code className="font-mono">{host}</code> to itself. To scan it from another device, set{" "}
+        <code className="font-mono">FRONTEND_URL</code> to this machine&apos;s network address
+        (for example <code className="font-mono">http://192.168.1.18:3000</code>), restart the
+        backend, and regenerate the QR.
+      </p>
+    </Alert>
   );
 }

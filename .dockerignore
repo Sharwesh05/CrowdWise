@@ -1,0 +1,50 @@
+# Keep build contexts small and host-only artifacts out of the images.
+# Without this, .git and backend/.venv are uploaded to the daemon on every
+# build, and host node_modules can overwrite the ones installed in-image.
+.git
+.gitignore
+.github
+
+# Secrets never belong in an image layer.
+.env
+.env.*
+!.env.example
+
+# Python (host)
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+
+# Node (host)
+**/node_modules
+**/.next
+**/out
+**/dist
+**/*.tsbuildinfo
+**/.eslintcache
+
+# Hardhat (host)
+blockchain/artifacts
+blockchain/cache
+blockchain/typechain-types
+
+# Local state
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+backend/storage
+storage
+
+# Docs and editor cruft
+docs
+*.md
+!README.md
+.vscode
+.idea
+.DS_Store

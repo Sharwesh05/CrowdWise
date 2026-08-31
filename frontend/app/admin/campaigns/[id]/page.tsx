@@ -28,6 +28,7 @@ import {
 } from "@/components/ui";
 import { RequireRole } from "@/components/layout/require-role";
 import { AIAnalysisPanel } from "@/features/campaign/ai-analysis-panel";
+import { CommunityInsightsPanel, SentimentPanel } from "@/features/campaign/community-panel";
 import { ApiError } from "@/lib/api";
 import { formatCompactCurrency, formatDateTime } from "@/lib/format";
 import { CAMPAIGN_STATUS_META } from "@/lib/utils";
@@ -189,7 +190,7 @@ function ReviewContent({ publicId }: { publicId: string }) {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
           {data.risk_indicators.length > 0 && (
             <Card className="border-caution/30">
               <CardHeader>
@@ -211,7 +212,22 @@ function ReviewContent({ publicId }: { publicId: string }) {
             </Card>
           )}
 
-          <AIAnalysisPanel analysis={data.analysis} showQuestions />
+          <AIAnalysisPanel
+            analysis={data.analysis}
+            showQuestions
+            publicId={data.campaign.public_id}
+            canRefresh
+          />
+
+          {/* An admin decides on a campaign here, so the community signal has to
+              be on this page too — previously it was only on the public and
+              creator views, and a reviewer had to leave the queue to see it. */}
+          <SentimentPanel
+            sentiment={data.sentiment ?? null}
+            publicId={data.campaign.public_id}
+            canRefresh
+          />
+          <CommunityInsightsPanel publicId={data.campaign.public_id} canRefresh />
 
           <Card>
             <CardHeader>
@@ -226,7 +242,7 @@ function ReviewContent({ publicId }: { publicId: string }) {
           </Card>
         </div>
 
-        <aside className="space-y-6">
+        <aside className="min-w-0 space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Creator</CardTitle>
