@@ -153,6 +153,36 @@ needs a public HTTPS URL, so it cannot reach `localhost` at all.
 The admin **"simulate payment"** control stops working under `razorpay` — pay
 with test card `4111 1111 1111 1111`, any future expiry, any CVV.
 
+### Refunds
+
+Money only ever leaves through the payment provider — never through the chain.
+The lifecycle:
+
+```
+outcome decides REFUND            campaign  -> REFUND_PENDING
+  (a contributor vote, or the                 contributions -> REFUND_PENDING
+   AUTOMATIC_REFUND rule)
+worker sweep calls the gateway    payment   -> REFUND_INITIATED
+gateway confirms                  payment   -> REFUNDED
+  (synchronously under the demo               contribution -> REFUNDED
+   provider; by `refund.*` webhook
+   under Razorpay)
+last contribution settles         campaign  -> CLOSED
+```
+
+The sweep runs in the worker every 30s and is governed by
+`AUTO_PROCESS_REFUNDS`. Set it to `false` to keep an operator in the loop:
+campaigns then hold at `REFUND_PENDING` until someone runs the refund action.
+
+Refunding is safe to run repeatedly. Each payment is guarded on its own status,
+so a second sweep over a refund that is still in flight skips it rather than
+sending the contributor their money twice — and under Razorpay, which settles
+asynchronously, that overlap is the normal case rather than an edge one.
+
+Under `razorpay` the `refund.*` webhook is what completes a refund, so without a
+reachable webhook URL refunds will sit at `REFUND_INITIATED`: the money has been
+sent, but CrowdWise cannot see the confirmation.
+
 ### Blockchain
 
 ```
@@ -188,16 +218,22 @@ BLOCKCHAIN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7
 ## 6. HTTPS and phone access
 
 The stack serves plain HTTP on `:3000` and `:8000`, which is fine on this
-machine and broken on a phone. Two separate things go wrong over a LAN address:
+machine and broken on a phone: **browsers expose the camera only in a secure
+context** (HTTPS or localhost), so the in-page QR scanner cannot run over
+`http://<lan-ip>:3000` at all. The HTTPS proxy fixes that, and puts the app and
+API on one origin so CORS stops applying.
 
-- **`NEXT_PUBLIC_API_URL` is compiled into the frontend.** If it says
-  `http://localhost:8000`, a phone calls *itself* and every request fails, even
-  though the page loads.
-- **Browsers expose the camera only in a secure context** (HTTPS or localhost),
-  so the in-page QR scanner cannot run over `http://<lan-ip>:3000` at all.
+The frontend does **not** hard-code an API address. `frontend/lib/api.ts`
+resolves it from the address the page was opened on:
 
-The HTTPS proxy solves both, and puts the app and API on one origin so CORS
-stops applying.
+| Page opened on | API calls go to |
+|---|---|
+| `https://localhost`, `https://<lan-ip>` (Caddy) | the same origin — relative `/api/*` |
+| `http://localhost:3000`, `http://<lan-ip>:3000` | same host, port `8000` |
+
+So one build works on localhost *and* over the LAN, and a new DHCP address needs
+no frontend rebuild. Setting `NEXT_PUBLIC_API_URL` overrides all of it with a
+fixed origin — leave it empty unless the API really lives on another host.
 
 ### One-time setup
 
@@ -215,22 +251,25 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
 Find your address with `ip -4 addr show scope global | grep -oP 'inet \K[\d.]+'`.
 Both files are gitignored: a private key never belongs in the repository.
 
-Then point the app at the HTTPS origin in `.env`:
+Then point the *backend* at the HTTPS origin in `.env`. `FRONTEND_URL` is what
+the QR codes encode, so it must name the address a phone can reach — not
+localhost:
 
 ```
 FRONTEND_URL=https://192.168.1.18
 BACKEND_URL=https://192.168.1.18
-NEXT_PUBLIC_API_URL=https://192.168.1.18
-NEXT_PUBLIC_APP_URL=https://192.168.1.18
-CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://192.168.1.18
+NEXT_PUBLIC_API_URL=
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://localhost,https://127.0.0.1,http://192.168.1.18:3000,https://192.168.1.18
 ```
 
-`NEXT_PUBLIC_*` are build-time, so the frontend must be rebuilt, not restarted:
+These are read at startup, so a restart is enough:
 
 ```bash
 docker compose restart backend worker
-docker compose up --build -d frontend
 ```
+
+The `CORS_ORIGINS` entries only matter for the direct HTTP ports; through Caddy
+every call is same-origin.
 
 ### Starting it
 
@@ -249,7 +288,9 @@ restart. Only 443 is published; Caddy's admin API on 2019 is deliberately not
 exposed, since it can reconfigure the running server.
 
 Then open **`https://192.168.1.18`** on the phone and tap through the
-certificate warning once. The certificate is self-signed, so that warning is
+certificate warning once. On this machine the same stack answers on
+**`https://localhost`** — the certificate names `localhost` and `127.0.0.1` as
+well as the LAN IP — and the plain `http://localhost:3000` still works too. The certificate is self-signed, so that warning is
 expected; a public deployment would use a CA-issued one, which Caddy can obtain
 automatically given a real domain.
 
@@ -285,16 +326,14 @@ that do not obviously point at the address.
      -addext "subjectAltName=IP:<new-ip>,IP:127.0.0.1,DNS:localhost"
    ```
 
-3. **Update five values in `.env`** — `FRONTEND_URL`, `BACKEND_URL`,
-   `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_APP_URL`, `CORS_ORIGINS`.
+3. **Update `.env`** — `FRONTEND_URL`, `BACKEND_URL`, and the LAN entries in
+   `CORS_ORIGINS`. Leave `NEXT_PUBLIC_API_URL` empty; the frontend follows
+   whatever address you open it on.
 
-4. **Rebuild the frontend; restart the rest.** `NEXT_PUBLIC_*` are compiled into
-   the JavaScript bundle at image build time
-   (`infrastructure/docker/frontend.Dockerfile`), so a restart silently keeps the
-   old address. This is the step people miss.
+4. **Restart.** No frontend rebuild is needed, because no address is compiled
+   into the bundle.
 
    ```bash
-   docker compose up --build -d frontend
    docker compose restart backend worker
    docker compose --profile https restart caddy
    ```
@@ -318,16 +357,16 @@ that do not obviously point at the address.
 | Symptom | Cause |
 |---|---|
 | `TLS alert internal error` / `HTTP 000` | Certificate does not name the address. SNI cannot carry an IP, so the cert must be supplied explicitly (it is) and must list the IP in `subjectAltName`. |
-| Page loads, all data fails | Frontend still built with the old `NEXT_PUBLIC_API_URL`. Rebuild, do not restart. |
+| Page loads, all data fails | `NEXT_PUBLIC_API_URL` was set to a stale origin and is overriding the runtime one. Clear it and rebuild the frontend. |
 | Phone cannot reach the host at all | Different network — guest SSID or mobile data. Many routers isolate guest clients from the LAN. |
 | Camera still refuses | Confirm the address bar shows `https://`. The scanner is unavailable on any plain-HTTP LAN address. |
 | QR opens a dead link | `FRONTEND_URL` is what the QR encodes. If it still says `localhost`, the phone resolves that to itself. |
 | `ERR_CERT_COMMON_NAME_INVALID`, or a certificate naming the wrong address | The IP changed since the certificate was generated — see *If your IP changes*. |
-| `npm run dev` still calls `localhost:8000` whatever the root `.env` says | Next reads `frontend/.env.local`, not the repo-root `.env`. That file is gitignored, so the divergence is invisible in the repo. Only the Docker path uses the root `.env`. |
+| `npm run dev` calls the wrong API host | `frontend/.env.local` sets `NEXT_PUBLIC_API_URL`. Next reads that file, not the repo-root `.env`, and it is gitignored so the divergence is invisible in the repo. Comment the line out to go back to the derived address. |
 
-After switching to HTTPS, the old `http://192.168.1.18:3000` still serves the
-page but its API calls fail, because the bundle now points at the HTTPS origin.
-Use the HTTPS address from then on.
+After switching to HTTPS, `http://192.168.1.18:3000` keeps working — its calls
+go to `http://192.168.1.18:8000`, which `CORS_ORIGINS` allows. It just cannot
+use the camera, so use the HTTPS address for anything involving the scanner.
 
 ---
 
@@ -346,7 +385,7 @@ Use the HTTPS address from then on.
 | `EACCES` writing `deployments/localhost.json` | SELinux denying a bind mount on a filesystem that cannot hold labels (NTFS/exFAT) | fixed: `security_opt: [label:disable]` on the `blockchain` service |
 | `worker` shows **unhealthy** | it inherits the backend image's healthcheck, which curls `:8000/health`, but the worker runs the scheduler, not uvicorn | cosmetic; the scheduler is fine |
 | Huge phantom diff across untouched files | CRLF committed from a Windows checkout | `.gitattributes` added; run `git add --renormalize .` once |
-| Phone loads the page but no data | frontend built with the old `NEXT_PUBLIC_API_URL` | see section 6 — rebuild the frontend, a restart is not enough |
+| Phone loads the page but no data | `NEXT_PUBLIC_API_URL` pins a stale origin, or the phone's origin is missing from `CORS_ORIGINS` | see section 6 — clear the variable, or serve the phone through the HTTPS proxy where CORS does not apply |
 | "Start camera" does nothing over LAN | browsers block the camera outside a secure context | see section 6 — serve over HTTPS |
 | Certificate error, or the phone worked yesterday and not today | the machine's LAN IP changed | see section 6 — *If your IP changes* |
 

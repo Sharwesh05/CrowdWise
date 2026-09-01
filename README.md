@@ -19,7 +19,7 @@ Most crowdfunding platforms model the domain as `campaign → payment → money 
 CrowdWise models it as a governed lifecycle:
 
 ```
-Creator → Register → Demo KYC → ₹500 Application Fee → Campaign Submission
+Creator → Register → Demo KYC → Application Fee → Campaign Submission
        → AI Campaign Analysis → Admin Review → Approval → LIVE
        → Unique Campaign QR → Physical / Online Discovery → Campaign Page
        → Feedback / Rating → Razorpay Contribution → Server-side Verification
@@ -266,7 +266,7 @@ provider switches and known failure modes are in
 [`docs/runbook.md`](docs/runbook.md). The short version:
 
 1. Register a creator, complete demo KYC → **VERIFIED**
-2. Pay the ₹500 application fee → verified server-side
+2. Pay the application fee → verified server-side
 3. Create the *Solar Water Purifier* campaign, run AI analysis
 4. Sign in as admin, review the gates, approve → campaign goes **LIVE** with a QR
 5. Scan the QR from a phone or another browser

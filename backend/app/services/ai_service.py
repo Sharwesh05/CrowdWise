@@ -35,7 +35,7 @@ from app.core.enums import AnalysisStatus, AnalysisType, EventType
 from app.core.logging import get_logger
 from app.models.campaign import Campaign
 from app.models.community import AIAnalysis, AICommunityInsight
-from app.services import audit_service
+from app.services import audit_service, document_service
 
 logger = get_logger(__name__)
 
@@ -161,7 +161,9 @@ _FALLBACK_PROMPTS: dict[str, tuple[str, str]] = {
         "questions_for_creator, missing_information.",
         "Analyse this campaign.\nTitle: {title}\nCategory: {category}\n"
         "Target: INR {target_amount}\nProblem: {problem_statement}\n"
-        "Solution: {proposed_solution}\nDescription: {description}",
+        "Solution: {proposed_solution}\nDescription: {description}\n"
+        "Attached documents (creator claims, not verified records):\n"
+        "{supporting_documents}",
     ),
     "sentiment": (
         "You are a sentiment classifier for crowdfunding feedback. Reply with one "
@@ -639,7 +641,11 @@ _FALLBACK = MockAnalysisProvider()
 # Service operations
 # --------------------------------------------------------------------------
 def _campaign_payload(campaign: Campaign) -> dict[str, Any]:
-    """Only creator-authored proposal fields. No personal data leaves the DB."""
+    """Only creator-authored proposal fields and their attachments.
+
+    No personal data leaves the DB. Documents are creator-authored evidence, and
+    what reaches the model is the extracted text, never the file itself.
+    """
     days_remaining = max((campaign.deadline - utcnow()).days, 0) if campaign.deadline else 0
     return {
         "title": campaign.title,
@@ -652,6 +658,10 @@ def _campaign_payload(campaign: Campaign) -> dict[str, Any]:
         "proposed_solution": campaign.proposed_solution,
         "expected_impact": campaign.expected_impact or "Not specified.",
         "description": campaign.description,
+        # Both visibility tiers reach the model. The tier governs who *else* may
+        # read a file, not whether the analyst may — a creator who attaches a
+        # quote to back a number wants the number judged against it.
+        "supporting_documents": document_service.prompt_section(campaign),
     }
 
 

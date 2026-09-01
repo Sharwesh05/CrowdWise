@@ -5,6 +5,7 @@ Four periodic jobs, all idempotent and safe to run repeatedly:
 * classify feedback that is still pending
 * close campaigns whose deadline has passed
 * close governance rounds whose voting window has expired
+* execute the refunds a decided outcome has ordered
 * anchor contributions still waiting on the chain
 
 Deliberately a thread rather than Celery: no broker to run, nothing extra in the
@@ -29,7 +30,7 @@ _thread: threading.Thread | None = None
 
 def run_once() -> dict[str, int]:
     """Run every periodic job once. Safe to call from a script or a test."""
-    results = {"feedback": 0, "deadlines": 0, "governance": 0, "blockchain": 0}
+    results = {"feedback": 0, "deadlines": 0, "governance": 0, "refunds": 0, "blockchain": 0}
     db = session_scope()
     try:
         results["feedback"] = sentiment_service.analyze_pending(db, limit=100)
@@ -45,6 +46,13 @@ def run_once() -> dict[str, int]:
         results["governance"] = governance_service.process_due_governance(db)
     except Exception as exc:
         logger.error("worker_governance_failed", error=str(exc))
+        db.rollback()
+    try:
+        # After governance, so a round closed in this same pass has its refunds
+        # executed now rather than a tick later.
+        results["refunds"] = governance_service.process_due_refunds(db)
+    except Exception as exc:
+        logger.error("worker_refund_failed", error=str(exc))
         db.rollback()
     try:
         results["blockchain"] = blockchain_service.sync_pending_contributions(db)

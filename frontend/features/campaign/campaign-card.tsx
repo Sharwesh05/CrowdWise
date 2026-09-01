@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BadgeCheck, Clock, HeartHandshake, Star } from "lucide-react";
 
 import { Badge, Progress } from "@/components/ui";
+import { mediaUrl } from "@/lib/api";
 import { formatCompactCurrency, formatNumber } from "@/lib/format";
 import { CAMPAIGN_STATUS_META, CATEGORY_LABELS, cn, healthTone } from "@/lib/utils";
 import type { CampaignSummary } from "@/types";
@@ -25,7 +26,7 @@ export function CampaignCard({ campaign }: { campaign: CampaignSummary }) {
         {campaign.cover_image_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={campaign.cover_image_url}
+            src={mediaUrl(campaign.cover_image_url)}
             alt=""
             className="h-full w-full object-cover"
             loading="lazy"

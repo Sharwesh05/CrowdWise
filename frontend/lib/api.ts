@@ -8,8 +8,41 @@
 
 import type { ApiErrorBody } from "@/types/api-error";
 
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
+/**
+ * Where the API lives, resolved from the page's own origin so one build serves
+ * every address the demo is reached on — no rebuild when the LAN IP changes:
+ *
+ *   https://<host>        (behind the Caddy front door) -> "", /api/* is same-origin
+ *   http://<host>:3000    (next dev, or the frontend container) -> http://<host>:8000
+ *
+ * `NEXT_PUBLIC_API_URL` still wins when set, for a deployment whose API really
+ * does live on another host. On the server the base is empty, so server-rendered
+ * markup stays relative and matches what the client renders after hydration.
+ */
+const CONFIGURED_API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "";
+const FRONTEND_PORT = "3000";
+const BACKEND_PORT = "8000";
+
+function resolveApiUrl(): string {
+  if (CONFIGURED_API_URL) return CONFIGURED_API_URL;
+  if (typeof window === "undefined") return "";
+  const { protocol, hostname, port } = window.location;
+  return port === FRONTEND_PORT ? `${protocol}//${hostname}:${BACKEND_PORT}` : "";
+}
+
+export const API_URL = resolveApiUrl();
+
+/**
+ * Resolve a stored media URL for display.
+ *
+ * Uploads are stored as origin-relative paths so they load from whichever
+ * address the app is opened on. A creator may also paste an absolute URL to an
+ * image hosted elsewhere, which is passed through untouched.
+ */
+export function mediaUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  return /^(https?:)?\/\//i.test(url) || url.startsWith("data:") ? url : `${API_URL}${url}`;
+}
 
 const CSRF_COOKIE = "cw_csrf";
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);

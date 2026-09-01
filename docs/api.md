@@ -97,13 +97,17 @@ Razorpay checkout sheet requires.
 | `POST` | `/api/campaigns` | Creates a `DRAFT` plus its application and outcome rules |
 | `GET` | `/api/campaigns/my` | The creator's campaigns |
 | `GET` | `/api/campaigns/{id}` | Owner view: application, review notes, timeline |
-| `PATCH` | `/api/campaigns/{id}` | Editable only while `DRAFT`, `KYC_PENDING` or `FEE_PENDING` |
+| `PATCH` | `/api/campaigns/{id}` | Editable while `DRAFT`, `KYC_PENDING`, `FEE_PENDING` or `UNDER_REVIEW`; the response's `editable` flag is the authority. Editing under review flags the analysis as stale on the review panel |
 | `POST` | `/api/campaigns/{id}/submit` | `DRAFT → KYC_PENDING → FEE_PENDING`; **409 unless KYC is verified** |
-| `POST` | `/api/campaigns/{id}/application-fee/order` | Creates the ₹500 order |
+| `POST` | `/api/campaigns/{id}/application-fee/order` | Creates the application fee order |
 | `GET` | `/api/campaigns/{id}/application-fee/status` | Fee and campaign status |
 | `POST` | `/api/campaigns/{id}/analyze` | Runs analysis, then `ANALYSIS_PENDING → UNDER_REVIEW` |
 | `GET` | `/api/campaigns/{id}/analysis` | Latest analysis |
-| `POST` | `/api/campaigns/{id}/documents` | Upload; MIME allowlist, size cap, randomised storage key |
+| `POST` | `/api/campaigns/{id}/documents` | Upload; `visibility` is `SHARED` or `AI_ONLY` (default). MIME allowlist, size cap, randomised storage key |
+| `GET` | `/api/campaigns/{id}/documents` | Both tiers, with whether the AI could read each file |
+| `DELETE` | `/api/campaigns/{id}/documents/{doc_id}` | Removes the record and the stored bytes |
+| `GET` | `/api/campaigns/{id}/documents/{doc_id}/download` | Authenticated. Creator/admin read any tier; another signed-in user reads `SHARED` only, and only once the campaign is public |
+| `POST` | `/api/campaigns/{id}/cover-image` | Replaces the cover image; images only, stored under `covers/` |
 | `GET` | `/api/campaigns/{id}/qr` | QR token, URL and data URI (owner only) |
 
 ### Public
@@ -112,6 +116,7 @@ Razorpay checkout sheet requires.
 |---|---|---|
 | `GET` | `/api/public/campaigns` | `search`, `category`, `status`, `sort`, `limit`, `offset` |
 | `GET` | `/api/public/campaigns/{public_id}` | Full public page projection |
+| `GET` | `/api/public/campaigns/{public_id}/documents` | Counts for everyone; the `SHARED` files only when signed in |
 | `GET` | `/api/public/campaigns/{public_id}/qr.png` | Downloadable PNG |
 | `GET` | `/api/public/campaigns/{public_id}/feedback` | Paginated |
 | `GET` | `/api/public/campaigns/{public_id}/contributions` | Backers, first name and initial only |
@@ -173,6 +178,22 @@ arrive.
 A vote is rejected (409/403) when the campaign is not in `GOVERNANCE`, the round
 is closed or expired, the caller has no verified contribution, the caller already
 voted, or the choice is not one of the campaign's predefined options.
+
+Closing a round only *decides*; it moves no money. A `REFUND` decision — whether
+voted or from the `AUTOMATIC_REFUND` rule — puts the campaign and its
+contributions into `REFUND_PENDING`. The worker then executes them:
+
+```
+contribution  REFUND_PENDING -> REFUNDED
+payment       CAPTURED -> REFUND_INITIATED -> REFUNDED
+campaign      REFUND_PENDING -> CLOSED   (once every contribution has settled)
+```
+
+`REFUND_INITIATED` is what makes the sweep re-entrant: a payment already in that
+state is skipped rather than refunded a second time. Under Razorpay the
+`refund.*` webhook completes the transition; the demo provider settles
+synchronously. Set `AUTO_PROCESS_REFUNDS=false` to hold at `REFUND_PENDING` and
+require an operator.
 
 ### Blockchain
 

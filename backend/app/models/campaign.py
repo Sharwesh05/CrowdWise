@@ -25,6 +25,7 @@ from app.core.enums import (
     ApprovalStatus,
     CampaignCategory,
     CampaignStatus,
+    DocumentVisibility,
     GovernanceStatus,
     OutcomeType,
     VotingWeightMode,
@@ -148,7 +149,7 @@ class Campaign(Base, TimestampMixin):
 
 
 class CampaignApplication(Base, TimestampMixin):
-    """The creator's application to run a campaign, gated by the ₹500 fee."""
+    """The creator's application to run a campaign, gated by a small fee."""
 
     __tablename__ = "campaign_applications"
 
@@ -179,6 +180,11 @@ class CampaignDocument(Base):
 
     Only the randomised storage key is persisted — never the user-supplied
     filename as a path component.
+
+    Text is extracted once, at upload, and kept here. The AI analyst then reads a
+    column instead of re-fetching and re-parsing blobs on every run, and an
+    unparseable file is a fact recorded at the moment it is uploaded — visible to
+    the creator right away — rather than a surprise at analysis time.
     """
 
     __tablename__ = "campaign_documents"
@@ -191,11 +197,22 @@ class CampaignDocument(Base):
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Defaults to the more private of the two tiers: a creator who does not
+    # choose has not consented to publishing the file.
+    visibility: Mapped[str] = mapped_column(
+        String(20), default=DocumentVisibility.AI_ONLY, nullable=False
+    )
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utcnow, nullable=False
     )
 
     campaign: Mapped["Campaign"] = relationship(back_populates="documents")
+
+    @property
+    def is_machine_readable(self) -> bool:
+        return bool(self.extracted_text)
 
 
 class CampaignOutcome(Base):

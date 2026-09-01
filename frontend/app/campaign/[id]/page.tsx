@@ -31,6 +31,7 @@ import {
 import { AIAnalysisPanel } from "@/features/campaign/ai-analysis-panel";
 import { UpdatesPanel } from "@/features/campaign/updates-panel";
 import { BlockchainPanel } from "@/features/campaign/blockchain-panel";
+import { SharedDocumentsPanel } from "@/features/campaign/shared-documents-panel";
 import {
   CommunityInsightsPanel,
   FeedbackList,
@@ -39,7 +40,7 @@ import {
 import { ContributeDialog } from "@/features/campaign/contribute-dialog";
 import { FeedbackDialog } from "@/features/campaign/feedback-dialog";
 import { GovernancePanel } from "@/features/governance/governance-panel";
-import { API_URL } from "@/lib/api";
+import { API_URL, mediaUrl } from "@/lib/api";
 import { formatCompactCurrency, formatCurrency, formatNumber, formatTimeRemaining } from "@/lib/format";
 import { CAMPAIGN_STATUS_META, CATEGORY_LABELS, cn, healthTone } from "@/lib/utils";
 import { useCampaignContributions, usePublicCampaign, useSession } from "@/hooks";
@@ -114,6 +115,17 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
               <h1 className="mt-3 text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">
                 {campaign.title}
               </h1>
+
+              {campaign.cover_image_url && (
+                <div className="mt-5 overflow-hidden rounded-xl border border-surface-border bg-surface-subtle">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={mediaUrl(campaign.cover_image_url)}
+                    alt={`Cover image for ${campaign.title}`}
+                    className="h-auto max-h-80 w-full object-cover"
+                  />
+                </div>
+              )}
               <p className="mt-3 max-w-2xl text-lg leading-relaxed text-ink-muted">
                 {campaign.short_description}
               </p>
@@ -345,6 +357,8 @@ export default function CampaignPage({ params }: { params: { id: string } }) {
                   </CardContent>
                 </Card>
               )}
+
+              <SharedDocumentsPanel publicId={campaign.public_id} />
             </div>
           )}
 

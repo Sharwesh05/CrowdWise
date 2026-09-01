@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowLeft, Info } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Info } from "lucide-react";
 
 import {
   Alert,
@@ -17,9 +17,11 @@ import {
   Textarea,
 } from "@/components/ui";
 import { RequireRole } from "@/components/layout/require-role";
+import { DocumentsPanel } from "@/features/campaign/documents-panel";
 import { ApiError } from "@/lib/api";
 import { CATEGORY_LABELS } from "@/lib/utils";
 import { useCreateCampaign, useKycStatus } from "@/hooks";
+import type { CreatorCampaign } from "@/types";
 import Link from "next/link";
 
 const MIN = {
@@ -49,6 +51,10 @@ function NewCampaignForm() {
   const create = useCreateCampaign();
   const { data: kyc } = useKycStatus();
   const [error, setError] = useState<string | null>(null);
+  // The draft, once it exists. Attachments need a campaign id, so the form does
+  // not navigate away on success — it turns into the attachment step for the
+  // campaign it just created.
+  const [draft, setDraft] = useState<CreatorCampaign | null>(null);
 
   const [form, setForm] = useState({
     title: "",
@@ -91,11 +97,21 @@ function NewCampaignForm() {
         // Sent as an ISO instant; the backend rejects a deadline in the past.
         deadline: new Date(`${form.deadline}T23:59:59`).toISOString(),
       });
-      router.push(`/creator/campaigns/${created.id}`);
+      setDraft(created);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Could not create the campaign.");
     }
   };
+
+  if (draft) {
+    return (
+      <AttachmentsStep
+        draft={draft}
+        onDone={() => router.push(`/creator/campaigns/${draft.id}`)}
+      />
+    );
+  }
 
   return (
     <div className="container-page py-10">
@@ -333,6 +349,54 @@ function NewCampaignForm() {
             </Button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Step two: the cover image and the supporting documents.
+ *
+ * Deliberately after creation rather than before it. An attachment belongs to a
+ * campaign, and inventing a client-side holding area for files that may never be
+ * saved would mean two upload paths to keep honest instead of one. The draft is
+ * already saved by the time this renders, so leaving the page loses nothing.
+ */
+function AttachmentsStep({
+  draft,
+  onDone,
+}: {
+  draft: CreatorCampaign;
+  onDone: () => void;
+}) {
+  return (
+    <div className="container-page py-10">
+      <div className="mx-auto max-w-3xl">
+        <Alert tone="positive" className="mb-6">
+          <span className="flex gap-2">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <span>
+              <strong>{draft.title}</strong> is saved as a draft ({draft.public_id}). Add your
+              cover image and any supporting documents below — you can also do this later.
+            </span>
+          </span>
+        </Alert>
+
+        <header className="mb-6">
+          <h1 className="text-2xl font-semibold tracking-tight">Image and documents</h1>
+          <p className="mt-2 text-ink-muted">
+            The AI reads the text of every document you attach before the reviewer sees it.
+            Choose per file whether supporters can open it too.
+          </p>
+        </header>
+
+        <DocumentsPanel campaignId={draft.id} coverImageUrl={draft.cover_image_url} />
+
+        <div className="mt-6 flex justify-end">
+          <Button type="button" onClick={onDone}>
+            Continue to the campaign
+          </Button>
+        </div>
       </div>
     </div>
   );

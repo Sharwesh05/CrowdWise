@@ -16,6 +16,10 @@ from app.services import storage_service
 
 router = APIRouter(prefix="/api/files", tags=["Campaigns"])
 
+# Prefixes this unauthenticated route must never serve. Cover images live
+# under `covers/` precisely so they can be served here and documents cannot.
+PRIVATE_PREFIXES = ("campaigns/",)
+
 
 @router.get("/{file_path:path}")
 def get_file(file_path: str) -> Response:
@@ -24,6 +28,12 @@ def get_file(file_path: str) -> Response:
     # Traversal is rejected here and again inside the provider.
     if ".." in file_path or file_path.startswith(("/", "\\")):
         raise ValidationError("Invalid file path.")
+    # Supporting documents live under `campaigns/` and are never served here.
+    # This route asks nobody who they are, so a storage key that leaked once
+    # would otherwise be a permanent public link to a file its creator marked
+    # private. They are served by the authorisation-checking download route.
+    if file_path.startswith(PRIVATE_PREFIXES):
+        raise NotFoundError("File not found.")
     try:
         content = storage_service.get_storage().get(file_path)
     except Exception as exc:

@@ -26,6 +26,7 @@ httpx==0.28.1          # Gemma / OpenAI-compatible endpoints
 razorpay==2.0.1        # payments
 web3==7.16.0           # EVM anchoring
 qrcode[pil]==8.2       # campaign QR codes
+pypdf==6.1.1           # text extraction from uploaded supporting documents
 
 # --- Utilities ---
 python-slugify==8.0.4

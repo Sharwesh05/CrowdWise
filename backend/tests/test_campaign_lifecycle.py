@@ -213,3 +213,65 @@ def test_audit_trail_records_every_transition(creator, admin, db):
         "CAMPAIGN_PUBLISHED",
     }:
         assert expected in actions, f"missing audit action {expected}"
+
+
+# --------------------------------------------------------------------------
+# Editing while the campaign waits in the review queue
+# --------------------------------------------------------------------------
+def under_review(creator) -> dict:
+    """Drive a campaign to UNDER_REVIEW, where a reviewer has not yet acted."""
+    complete_kyc(creator)
+    campaign = create_campaign(creator)
+    creator.post(f"/api/campaigns/{campaign['id']}/submit")
+    pay_application_fee(creator, campaign["id"])
+    analysed = creator.post(f"/api/campaigns/{campaign['id']}/analyze")
+    assert analysed.json()["status"] == "UNDER_REVIEW"
+    return campaign
+
+
+def test_creator_can_edit_a_campaign_under_review(creator):
+    """A campaign in the queue is still the creator's to correct."""
+    campaign = under_review(creator)
+    response = creator.patch(
+        f"/api/campaigns/{campaign['id']}",
+        json={"title": "Solar Water Purifiers for 60 Rural Schools"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["title"] == "Solar Water Purifiers for 60 Rural Schools"
+    assert body["status"] == "UNDER_REVIEW", "editing must not move the campaign"
+    assert body["editable"] is True
+
+
+def test_editing_under_review_flags_the_analysis_as_stale(creator, admin):
+    """A reviewer must never be shown scores for text that has since changed."""
+    campaign = under_review(creator)
+    before = admin.get(f"/api/admin/campaigns/{campaign['public_id']}").json()
+    assert not any("after this analysis" in flag for flag in before["risk_indicators"])
+
+    creator.patch(
+        f"/api/campaigns/{campaign['id']}",
+        json={"title": "Solar Water Purifiers for 60 Rural Schools"},
+    )
+
+    after = admin.get(f"/api/admin/campaigns/{campaign['public_id']}").json()
+    assert any("after this analysis" in flag for flag in after["risk_indicators"])
+
+
+def test_a_no_op_edit_does_not_flag_the_analysis(creator, admin):
+    """Saving the form unchanged is not an edit, and must not cry wolf."""
+    campaign = under_review(creator)
+    creator.patch(f"/api/campaigns/{campaign['id']}", json={"title": campaign["title"]})
+
+    review = admin.get(f"/api/admin/campaigns/{campaign['public_id']}").json()
+    assert not any("after this analysis" in flag for flag in review["risk_indicators"])
+
+
+def test_a_live_campaign_can_no_longer_be_edited(creator, admin):
+    """Contributors funded the text as it stands; it is fixed from publication."""
+    campaign = under_review(creator)
+    admin.post(f"/api/admin/campaigns/{campaign['public_id']}/approve", json={})
+
+    response = creator.patch(f"/api/campaigns/{campaign['id']}", json={"title": "Something else"})
+    assert response.status_code == 409, response.text
+    assert creator.get(f"/api/campaigns/{campaign['id']}").json()["editable"] is False

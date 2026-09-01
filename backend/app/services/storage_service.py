@@ -8,6 +8,7 @@ never become a path component.
 
 from __future__ import annotations
 
+import io as io_module
 import mimetypes
 import os
 import secrets
@@ -92,8 +93,19 @@ class LocalStorageProvider(StorageProvider):
             path.unlink()
 
     def url_for(self, key: str) -> str:
-        base = settings.storage_public_base_url or f"{settings.backend_url}/api/files"
-        return f"{base.rstrip('/')}/{key}"
+        """A path, not a host, unless one is explicitly configured.
+
+        `BACKEND_URL` is a single address, and this app is deliberately reachable
+        at several — localhost, the LAN IP, the HTTPS front door. Baking one of
+        them into a stored `cover_image_url` would mean an image that loads on
+        the machine that uploaded it and nowhere else (and is blocked as mixed
+        content over HTTPS). Returning a relative path lets the client resolve it
+        against whichever origin it is actually talking to, exactly as it already
+        does for every API call.
+        """
+        if settings.storage_public_base_url:
+            return f"{settings.storage_public_base_url.rstrip('/')}/{key}"
+        return f"/api/files/{key}"
 
 
 class S3StorageProvider(StorageProvider):
@@ -192,6 +204,66 @@ def _assert_magic_bytes(mime: str, content: bytes) -> None:
     expected = signatures.get(mime)
     if expected and not any(content.startswith(sig) for sig in expected):
         raise ValidationError("File content does not match its declared type.")
+
+
+# --------------------------------------------------------------------------
+# Text extraction — what the AI analyst actually reads
+# --------------------------------------------------------------------------
+# A generous cap. Long enough for a budget sheet or a project plan, short enough
+# that one uploaded book cannot crowd the proposal itself out of the prompt.
+MAX_EXTRACTED_CHARS = 20_000
+
+
+def extract_text(mime_type: str, content: bytes) -> tuple[str | None, str | None]:
+    """Pull readable text out of an upload.
+
+    Returns `(text, note)`. Exactly one is set: `note` explains, in words meant
+    for the creator, why a file yielded nothing — an image, a scanned PDF with no
+    text layer, a corrupt file. Silence is the one thing this must not return,
+    because a creator who uploads evidence should never be left assuming the
+    model read it.
+    """
+    if mime_type == "text/plain":
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("utf-8", errors="replace")
+        return _capped(text) or (None, "The file is empty.")
+
+    if mime_type == "application/pdf":
+        try:
+            from pypdf import PdfReader  # noqa: PLC0415
+        except ImportError:  # pragma: no cover - dependency is pinned
+            return None, "PDF text extraction is unavailable on this server."
+        try:
+            reader = PdfReader(io_module.BytesIO(content))
+            if reader.is_encrypted:
+                return None, "The PDF is password protected, so its text cannot be read."
+            pages = [page.extract_text() or "" for page in reader.pages]
+        except Exception as exc:
+            logger.warning("pdf_extract_failed", error=str(exc))
+            return None, "The PDF could not be parsed, so the AI cannot read it."
+        joined = "\n\n".join(part.strip() for part in pages if part.strip())
+        if not joined.strip():
+            return None, (
+                "No text layer was found — this looks like a scanned PDF. "
+                "Upload a text-based version for the AI to read it."
+            )
+        return _capped(joined)
+
+    return None, "The AI reads PDF and text files; this file is stored but not read."
+
+
+def _capped(text: str) -> tuple[str | None, str | None]:
+    text = text.strip()
+    if not text:
+        return None, "The file is empty."
+    if len(text) > MAX_EXTRACTED_CHARS:
+        return (
+            text[:MAX_EXTRACTED_CHARS],
+            f"Only the first {MAX_EXTRACTED_CHARS:,} characters are given to the AI.",
+        )
+    return text, None
 
 
 def store_upload(

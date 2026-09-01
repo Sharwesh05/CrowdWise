@@ -166,7 +166,7 @@ function ReviewContent({ publicId }: { publicId: string }) {
           icon={<BadgeCheck className="h-4 w-4" aria-hidden />}
         />
         <GateCard
-          title="₹500 application fee"
+          title="Application fee"
           ok={data.application_fee_paid}
           detail={
             data.application_fee_paid

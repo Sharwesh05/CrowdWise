@@ -218,7 +218,18 @@ def create_campaign(db: Session, creator: User, draft: CampaignDraft) -> Campaig
     return campaign
 
 
-EDITABLE_STATUSES = {CampaignStatus.DRAFT, CampaignStatus.KYC_PENDING, CampaignStatus.FEE_PENDING}
+# A proposal stays the creator's to correct right up until a reviewer acts on it.
+# UNDER_REVIEW is included deliberately: the campaign can sit in the queue for
+# days, and a creator who spots a wrong figure in their own budget should be able
+# to fix it rather than wait to be rejected for it. The edit is audited, and the
+# review panel flags a proposal that changed after its analysis ran, so a
+# reviewer is never quietly shown scores for text that no longer exists.
+EDITABLE_STATUSES = {
+    CampaignStatus.DRAFT,
+    CampaignStatus.KYC_PENDING,
+    CampaignStatus.FEE_PENDING,
+    CampaignStatus.UNDER_REVIEW,
+}
 
 
 def update_campaign(db: Session, campaign: Campaign, changes: dict[str, Any]) -> Campaign:
@@ -227,15 +238,21 @@ def update_campaign(db: Session, campaign: Campaign, changes: dict[str, Any]) ->
             f"A campaign in {campaign.status} can no longer be edited.",
             details={"status": campaign.status},
         )
+    if campaign.status == CampaignStatus.LIVE:  # pragma: no cover - defensive
+        raise ConflictError("A live campaign cannot be edited.")
     allowed = {
         "title", "short_description", "description", "problem_statement",
         "proposed_solution", "expected_impact", "category", "target_amount",
         "minimum_contribution", "deadline", "cover_image_url",
     }
+    changed: list[str] = []
     for key, value in changes.items():
-        if key in allowed and value is not None:
+        if key in allowed and value is not None and getattr(campaign, key) != value:
             setattr(campaign, key, value)
-    if "title" in changes and changes["title"]:
+            changed.append(key)
+    if not changed:
+        return campaign
+    if "title" in changed:
         campaign.slug = unique_slug(db, changes["title"])
     db.flush()
     audit_service.record_event(
@@ -243,7 +260,7 @@ def update_campaign(db: Session, campaign: Campaign, changes: dict[str, Any]) ->
         campaign_id=campaign.id,
         event_type=EventType.CAMPAIGN_UPDATED,
         actor_id=campaign.creator_id,
-        metadata={"fields": sorted(k for k in changes if k in allowed)},
+        metadata={"fields": sorted(changed)},
     )
     return campaign
 

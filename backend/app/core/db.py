@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, TypeDecorator, create_engine, event
+from sqlalchemy import DateTime, TypeDecorator, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.core.config import settings
@@ -72,6 +73,43 @@ class TimestampMixin:
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+@contextmanager
+def advisory_lock(key: int) -> Iterator[bool]:
+    """Hold an exclusive right to do something, across processes.
+
+    Both the API and the `worker` container run the same background jobs, so a
+    sweep that must not run twice at once needs a coordination point neither
+    process owns. A `threading.Lock` cannot see another process; the database
+    can.
+
+    Yields False rather than waiting — the caller is competing with another
+    worker that is already draining the same queue, so there is nothing to wait
+    for. The lock is taken on a dedicated connection so the unlock is guaranteed
+    to reach the session holding it: returning a connection to the pool resets it
+    with ROLLBACK, which session-level advisory locks survive. Postgres releases
+    them when the connection drops, so a killed worker cannot wedge the job.
+
+    On SQLite — the test and zero-infra fallback, always single-process — this is
+    a no-op that always grants.
+    """
+    if engine.dialect.name != "postgresql":
+        yield True
+        return
+
+    conn = engine.connect()
+    acquired = False
+    try:
+        acquired = bool(
+            conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}).scalar()
+        )
+        yield acquired
+    finally:
+        if acquired:
+            conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+            conn.commit()
+        conn.close()
 
 
 def get_db() -> Generator[Session, None, None]:

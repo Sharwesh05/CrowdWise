@@ -276,3 +276,188 @@ def test_contributor_dashboard_surfaces_open_votes(admin, contributor, funded_ca
     after = contributor.get("/api/contributor/dashboard").json()
     assert after["cards"]["open_votes"] == 0
     assert after["past_votes"][0]["choice"] == "REFUND"
+
+
+# --------------------------------------------------------------------------
+# Refund execution — the only path that moves money outward
+# --------------------------------------------------------------------------
+def _outcome_type(db, campaign_id: int, outcome_type: str) -> None:
+    """Set the campaign's locked end-state rule directly.
+
+    The rule is locked at publication and the service layer refuses edits, which
+    is the behaviour under test elsewhere — so a test that needs a different rule
+    reaches past the API rather than pretending the lock can be lifted.
+    """
+    from app.models.campaign import Campaign
+
+    campaign = db.get(Campaign, campaign_id)
+    campaign.outcome.outcome_type = outcome_type
+    db.commit()
+
+
+def _contributions(db, campaign_id: int):
+    from app.models.payment import Contribution
+
+    return (
+        db.query(Contribution)
+        .filter(Contribution.campaign_id == campaign_id)
+        .order_by(Contribution.id)
+        .all()
+    )
+
+
+def _payment_statuses(db, campaign_id: int) -> list[str]:
+    from app.models.payment import Contribution, Payment
+
+    rows = db.query(Payment).join(Contribution, Contribution.payment_id == Payment.id).filter(
+        Contribution.campaign_id == campaign_id
+    )
+    return [row.status for row in rows]
+
+
+def test_automatic_refund_flags_every_contribution(funded_campaign, admin, db):
+    """Regression: the campaign flag alone left the sweep with nothing to refund."""
+    from app.core.enums import ContributionStatus
+
+    _outcome_type(db, funded_campaign["id"], "AUTOMATIC_REFUND")
+    demo(admin, "simulate_deadline", funded_campaign["public_id"])
+
+    db.expire_all()
+    statuses = [c.status for c in _contributions(db, funded_campaign["id"])]
+    assert statuses == [str(ContributionStatus.REFUND_PENDING)] * 2
+
+
+def test_automatic_refund_actually_refunds_and_closes(funded_campaign, admin, db):
+    from app.core.enums import CampaignStatus, ContributionStatus, PaymentStatus
+    from app.models.campaign import Campaign
+    from app.services import governance_service
+
+    _outcome_type(db, funded_campaign["id"], "AUTOMATIC_REFUND")
+    demo(admin, "simulate_deadline", funded_campaign["public_id"])
+
+    db.expire_all()
+    assert governance_service.process_due_refunds(db) == 2
+
+    db.expire_all()
+    assert [c.status for c in _contributions(db, funded_campaign["id"])] == [
+        str(ContributionStatus.REFUNDED)
+    ] * 2
+    assert _payment_statuses(db, funded_campaign["id"]) == [str(PaymentStatus.REFUNDED)] * 2
+    # Every contributor made whole, so the campaign is finished.
+    assert db.get(Campaign, funded_campaign["id"]).status == str(CampaignStatus.CLOSED)
+
+
+def test_sweeping_twice_refunds_each_contribution_once(funded_campaign, admin, db, monkeypatch):
+    """The guard that matters: a second pass must not refund anybody again.
+
+    Forced onto the asynchronous provider path, because that is the only one
+    where the danger is real. A synchronous refund settles and closes the
+    campaign, so a later sweep finds nothing and the test would pass without
+    proving anything. Razorpay answers "processing" and finishes over a webhook,
+    which leaves the contributions in REFUND_PENDING — exactly the rows the
+    sweep selects on — so the second pass re-reads them and only the
+    payment-status guard stands between the contributors and a double refund.
+    """
+    from app.services import governance_service, payment_service
+
+    _outcome_type(db, funded_campaign["id"], "AUTOMATIC_REFUND")
+    demo(admin, "simulate_deadline", funded_campaign["public_id"])
+
+    provider = payment_service.get_provider()
+    calls: list[str] = []
+
+    def async_refund(payment_id, amount=None):
+        calls.append(payment_id)
+        return payment_service.RefundResult(
+            refund_id=f"rfnd_{len(calls)}", status="processing", provider=provider.name
+        )
+
+    monkeypatch.setattr(provider, "refund", async_refund)
+
+    db.expire_all()
+    governance_service.process_due_refunds(db)
+    db.expire_all()
+    # Still awaiting the gateway, so the campaign and its contributions remain
+    # selectable by the sweep.
+    assert [c.status for c in _contributions(db, funded_campaign["id"])] == [
+        "REFUND_PENDING"
+    ] * 2
+    governance_service.process_due_refunds(db)
+
+    assert len(calls) == 2, f"expected exactly one refund per contribution, got {calls}"
+    assert len(set(calls)) == 2
+
+
+def test_refund_is_not_reissued_for_a_payment_already_in_flight(funded_campaign, admin, db):
+    from app.core.enums import PaymentStatus
+    from app.services import payment_service
+
+    _outcome_type(db, funded_campaign["id"], "AUTOMATIC_REFUND")
+    demo(admin, "simulate_deadline", funded_campaign["public_id"])
+
+    db.expire_all()
+    contribution = _contributions(db, funded_campaign["id"])[0]
+    from app.models.payment import Payment
+
+    payment = db.get(Payment, contribution.payment_id)
+    payment.status = PaymentStatus.REFUND_INITIATED
+    db.flush()
+
+    result = payment_service.refund_contribution(db, contribution)
+    assert result.status == "already_in_flight"
+
+
+def test_vote_to_refund_still_refunds(funded_campaign, admin, contributor, db):
+    """The path that already worked must keep working."""
+    from app.core.enums import CampaignStatus, ContributionStatus
+    from app.models.campaign import Campaign
+    from app.services import governance_service
+
+    public_id = funded_campaign["public_id"]
+    demo(admin, "simulate_deadline", public_id)
+    contributor.post(f"/api/campaigns/{public_id}/vote", json={"choice": "REFUND"})
+    demo(admin, "close_governance", public_id)
+
+    db.expire_all()
+    governance_service.process_due_refunds(db)
+
+    db.expire_all()
+    assert [c.status for c in _contributions(db, funded_campaign["id"])] == [
+        str(ContributionStatus.REFUNDED)
+    ] * 2
+    assert db.get(Campaign, funded_campaign["id"]).status == str(CampaignStatus.CLOSED)
+
+
+def test_auto_process_refunds_off_moves_no_money(funded_campaign, admin, db, monkeypatch):
+    from app.core.config import settings
+    from app.core.enums import ContributionStatus
+    from app.services import governance_service
+
+    _outcome_type(db, funded_campaign["id"], "AUTOMATIC_REFUND")
+    demo(admin, "simulate_deadline", funded_campaign["public_id"])
+    monkeypatch.setattr(settings, "auto_process_refunds", False)
+
+    db.expire_all()
+    assert governance_service.process_due_refunds(db) == 0
+    db.expire_all()
+    assert [c.status for c in _contributions(db, funded_campaign["id"])] == [
+        str(ContributionStatus.REFUND_PENDING)
+    ] * 2
+
+
+def test_keep_what_you_raise_refunds_nobody(funded_campaign, admin, db):
+    from app.core.enums import CampaignStatus, ContributionStatus
+    from app.models.campaign import Campaign
+    from app.services import governance_service
+
+    _outcome_type(db, funded_campaign["id"], "KEEP_WHAT_YOU_RAISE")
+    demo(admin, "simulate_deadline", funded_campaign["public_id"])
+
+    db.expire_all()
+    assert governance_service.process_due_refunds(db) == 0
+    db.expire_all()
+    assert db.get(Campaign, funded_campaign["id"]).status == str(CampaignStatus.CLOSED)
+    assert all(
+        c.status != str(ContributionStatus.REFUND_PENDING)
+        for c in _contributions(db, funded_campaign["id"])
+    )

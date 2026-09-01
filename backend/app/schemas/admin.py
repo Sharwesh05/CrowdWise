@@ -12,9 +12,12 @@ from app.schemas.campaign import (
     AIAnalysisResponse,
     ApplicationResponse,
     CampaignSummary,
+    DocumentResponse,
     SentimentSummary,
 )
 from app.schemas.common import ORMModel
+
+__all__ = ["DocumentResponse"]  # re-exported; it lives in schemas.campaign
 
 
 class ApproveRequest(BaseModel):
@@ -38,15 +41,6 @@ class ReviewCreator(BaseModel):
     kyc_verified_at: datetime | None = None
     kyc_reference: str | None = None
     campaigns_created: int = 0
-
-
-class DocumentResponse(ORMModel):
-    id: int
-    file_name: str
-    mime_type: str
-    size: int
-    created_at: datetime
-    url: str | None = None
 
 
 class AdminCampaignReview(BaseModel):

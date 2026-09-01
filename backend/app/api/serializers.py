@@ -52,6 +52,7 @@ from app.services import (
     blockchain_service,
     campaign_service,
     campaign_state,
+    document_service,
     qr_service,
     sentiment_service,
     update_service,
@@ -248,6 +249,7 @@ def creator_campaign(db: Session, campaign: Campaign) -> CreatorCampaign:
             for event in audit_service.list_campaign_events(db, campaign.id, limit=50)
         ],
         allowed_transitions=campaign_state.next_states(campaign.status),
+        editable=campaign.status in campaign_service.EDITABLE_STATUSES,
     )
 
 
@@ -396,3 +398,25 @@ __all__ = [
     "vote_response",
     "BlockchainRecordType",
 ]
+
+
+def document_response(document) -> "DocumentResponse":
+    """One shape for a document, wherever it is listed.
+
+    `url` always points at the authenticated download route. The storage key is
+    never exposed: `/api/files` does not check who is asking, so a key in a
+    response body would be a bearer token for the file, for good.
+    """
+    from app.schemas.campaign import DocumentResponse
+
+    return DocumentResponse(
+        id=document.id,
+        file_name=document.file_name,
+        mime_type=document.mime_type,
+        size=document.size,
+        created_at=document.created_at,
+        visibility=document.visibility,
+        is_machine_readable=document.is_machine_readable,
+        extraction_note=document.extraction_note,
+        url=document_service.download_path(document.campaign_id, document.id),
+    )

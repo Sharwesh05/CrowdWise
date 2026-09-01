@@ -100,6 +100,11 @@ services:
     # blockchain retries. The API also runs these in-process; a separate worker
     # keeps that work off the request path under load.
     command: ["python", "-m", "app.workers.scheduler"]
+    # The image is the API's, whose baked-in health check curls :8000/health.
+    # This container serves no HTTP, so that check can only ever fail and report
+    # a working worker as unhealthy. Nothing depends on the condition either.
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   frontend:
@@ -107,7 +112,9 @@ services:
       context: .
       dockerfile: infrastructure/docker/frontend.Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        # Empty by design — the app resolves the API from the address it is opened
+        # on, so one image serves localhost, the LAN IP and the HTTPS proxy.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
         NEXT_PUBLIC_DEMO_MODE: ${NEXT_PUBLIC_DEMO_MODE:-true}
         NEXT_PUBLIC_RAZORPAY_KEY_ID: ${NEXT_PUBLIC_RAZORPAY_KEY_ID:-}

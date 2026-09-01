@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { LayoutDashboard, LogOut, Menu, QrCode, ShieldCheck, X } from "lucide-react";
+import { LayoutDashboard, LogOut, Menu, QrCode, X } from "lucide-react";
 
-import { Badge, Button } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { useLogout, useSession } from "@/hooks";
 import { initials } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -182,20 +182,6 @@ export function SiteHeader() {
               )}
             </div>
           </nav>
-        </div>
-      )}
-
-      {process.env.NEXT_PUBLIC_DEMO_MODE === "true" && (
-        <div className="border-b border-caution/20 bg-caution-soft">
-          <div className="container-page flex items-start gap-2 py-2">
-            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-caution-strong" aria-hidden />
-            <p className="text-xs text-caution-strong">
-              <Badge tone="caution" className="mr-2">
-                DEMO MODE
-              </Badge>
-              Simulated KYC, test payments and a local blockchain. No real money or identity data.
-            </p>
-          </div>
         </div>
       )}
     </header>

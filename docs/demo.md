@@ -84,7 +84,7 @@ states a real provider would report.
 
 Create the campaign first (Scene 4), then return here — or use the seeded creator.
 
-`/creator/campaigns/[id]` → **Lifecycle** tab → **Submit for review** → **Pay ₹500**.
+`/creator/campaigns/[id]` → **Lifecycle** tab → **Submit for review** → **Pay application fee**.
 
 With `PAYMENT_PROVIDER=demo` the fee is signed and verified locally. With Razorpay
 test keys the real checkout sheet opens.
@@ -129,7 +129,7 @@ strengths, concerns, recommendations and questions for the reviewer.
 **Window A** → sign out → sign in as `admin@example.com` → `/admin/dashboard` →
 **Review pending**.
 
-The review page shows three gate cards — identity verification, ₹500 fee,
+The review page shows three gate cards — identity verification, application fee,
 AI analysis — plus risk indicators, the full proposal, and the questions worth
 asking. Click **Approve and publish**.
 

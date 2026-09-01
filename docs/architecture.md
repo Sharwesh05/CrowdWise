@@ -151,7 +151,7 @@ stateDiagram-v2
     [*] --> DRAFT
     DRAFT --> KYC_PENDING: creator submits application
     KYC_PENDING --> FEE_PENDING: KYC VERIFIED
-    FEE_PENDING --> ANALYSIS_PENDING: ₹500 fee verified server-side
+    FEE_PENDING --> ANALYSIS_PENDING: application fee verified server-side
     ANALYSIS_PENDING --> UNDER_REVIEW: AI analysis stored
     UNDER_REVIEW --> APPROVED: admin approves
     UNDER_REVIEW --> REJECTED: admin rejects

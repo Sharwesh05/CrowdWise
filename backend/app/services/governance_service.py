@@ -26,7 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.db import utcnow
+from app.core.db import advisory_lock, utcnow
 from app.core.enums import (
     CampaignStatus,
     ContributionStatus,
@@ -45,6 +45,10 @@ from app.models.user import User
 from app.services import audit_service, campaign_state
 
 logger = get_logger(__name__)
+
+# Distinct from the chain sweeper's key: the two jobs are unrelated and must
+# never block one another.
+REFUND_LOCK_KEY = 0x43575F524546 % (2**63)
 
 VERIFIED_CONTRIBUTION_STATUSES = [
     str(ContributionStatus.PAYMENT_VERIFIED),
@@ -84,6 +88,11 @@ def apply_predefined_outcome(
         if outcome:
             outcome.selected_outcome = str(VoteChoice.REFUND)
             outcome.executed_at = utcnow()
+        # Flagging the campaign is not enough: the refund sweep selects
+        # *contributions* in REFUND_PENDING, so without this a campaign that
+        # promised an automatic refund would report success having refunded
+        # nobody. The vote-driven path in close_governance already does this.
+        mark_contributions_refund_pending(db, campaign)
         db.flush()
         audit_service.record_both(
             db,
@@ -408,23 +417,112 @@ def process_refunds(db: Session, campaign: Campaign, actor_id: int | None = None
             )
         ).scalars().all()
     )
-    succeeded, failed = 0, 0
+    initiated, skipped, failed = 0, 0, 0
     for contribution in rows:
         try:
-            payment_service.refund_contribution(db, contribution)
-            succeeded += 1
+            result = payment_service.refund_contribution(db, contribution)
+            # A refund already in flight or already settled is not a new one.
+            # Counting it as initiated would overstate what this pass did.
+            if result.status in ("already_in_flight", "already_refunded"):
+                skipped += 1
+            else:
+                initiated += 1
         except Exception as exc:
             failed += 1
             logger.error("refund_failed", contribution_id=contribution.id, error=str(exc))
     db.flush()
-    audit_service.record_event(
+
+    if initiated or failed:
+        # REQUESTED, not COMPLETED: this pass asked the gateway. A real provider
+        # settles asynchronously, and calling that "completed" would claim the
+        # money is back when it is still in flight. REFUND_COMPLETED is recorded
+        # once, by close_if_refunds_settled, when it actually is.
+        audit_service.record_event(
+            db,
+            campaign_id=campaign.id,
+            event_type=EventType.REFUND_REQUESTED,
+            actor_id=actor_id,
+            metadata={
+                "initiated": initiated,
+                "skipped": skipped,
+                "failed": failed,
+                "stage": "execution",
+            },
+        )
+    close_if_refunds_settled(db, campaign)
+    return {
+        "initiated": initiated,
+        "skipped": skipped,
+        "failed": failed,
+        "total": len(rows),
+    }
+
+
+def close_if_refunds_settled(db: Session, campaign: Campaign) -> bool:
+    """Close a refunding campaign once every contributor has been made whole.
+
+    Safe to call repeatedly and from anywhere a single refund settles, which is
+    why it checks the remaining work rather than counting completions.
+    """
+    if campaign.status != CampaignStatus.REFUND_PENDING:
+        return False
+    outstanding = db.execute(
+        select(func.count(Contribution.id)).where(
+            Contribution.campaign_id == campaign.id,
+            Contribution.status == str(ContributionStatus.REFUND_PENDING),
+        )
+    ).scalar_one()
+    if int(outstanding) > 0:
+        return False
+
+    campaign_state.transition(campaign, CampaignStatus.CLOSED)
+    db.flush()
+    audit_service.record_both(
         db,
         campaign_id=campaign.id,
-        event_type=EventType.REFUND_COMPLETED,
-        actor_id=actor_id,
-        metadata={"initiated": succeeded, "failed": failed},
+        action=EventType.REFUND_COMPLETED,
+        metadata={"note": "Every contribution refunded; campaign closed."},
     )
-    return {"initiated": succeeded, "failed": failed, "total": len(rows)}
+    logger.info("campaign_closed_after_refunds", campaign_id=campaign.id)
+    return True
+
+
+def process_due_refunds(db: Session, limit: int = 50) -> int:
+    """Worker pass: execute the refunds a decided outcome has already ordered.
+
+    This is the only path that moves money outward without a human, so it is
+    deliberately narrow: campaigns already in REFUND_PENDING, meaning the
+    decision was made by a vote or by the campaign's own predefined rule.
+
+    Serialised with an advisory lock because the API and the worker container
+    both run this loop. `refund_contribution` guards each payment individually
+    as well — the lock avoids the wasted contention, the per-payment guard is
+    what actually makes a double refund impossible.
+    """
+    if not settings.auto_process_refunds:
+        return 0
+
+    with advisory_lock(REFUND_LOCK_KEY) as acquired:
+        if not acquired:
+            logger.debug("refund_sweep_skipped", reason="another worker holds the lock")
+            return 0
+        due = list(
+            db.execute(
+                select(Campaign)
+                .where(Campaign.status == str(CampaignStatus.REFUND_PENDING))
+                .limit(limit)
+            ).scalars().all()
+        )
+        refunded = 0
+        for campaign in due:
+            try:
+                refunded += process_refunds(db, campaign)["initiated"]
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("refund_sweep_failed", campaign_id=campaign.id, error=str(exc))
+                db.rollback()
+        if due:
+            db.commit()
+        return refunded
 
 
 def process_due_governance(db: Session, limit: int = 50) -> int:

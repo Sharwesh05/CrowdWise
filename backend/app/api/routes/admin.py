@@ -22,7 +22,7 @@ from app.core.enums import (
     UserRole,
 )
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationError
-from app.models.campaign import Campaign
+from app.models.campaign import Campaign, CampaignEvent
 from app.models.chain import BlockchainTransaction
 from app.models.community import Feedback
 from app.models.payment import Contribution, Payment
@@ -34,7 +34,6 @@ from app.schemas.admin import (
     AuditLogResponse,
     DemoControlRequest,
     DemoControlResponse,
-    DocumentResponse,
     RejectRequest,
     RequestChangesRequest,
     ReviewCreator,
@@ -49,7 +48,6 @@ from app.services import (
     governance_service,
     kyc_service,
     sentiment_service,
-    storage_service,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -100,6 +98,24 @@ def all_campaigns(
     )
 
 
+def _edited_after(db, campaign: Campaign, analysis) -> bool:
+    """Did the creator change the proposal after this analysis was produced?
+
+    A campaign can be corrected while it waits in the review queue, so the
+    reviewer has to be told when the scores in front of them were computed from
+    text that has since changed. Read from the audit trail, which already records
+    every edit, rather than from `updated_at` — that bumps for a cover image or a
+    contribution too, and a flag that cries wolf is worse than no flag.
+    """
+    edited_at = db.execute(
+        select(func.max(CampaignEvent.created_at)).where(
+            CampaignEvent.campaign_id == campaign.id,
+            CampaignEvent.event_type == str(EventType.CAMPAIGN_UPDATED),
+        )
+    ).scalar()
+    return bool(edited_at and analysis.created_at and edited_at > analysis.created_at)
+
+
 def _risk_indicators(db, campaign: Campaign, analysis) -> list[str]:
     """Concrete, checkable flags — not vibes."""
     flags: list[str] = []
@@ -115,6 +131,11 @@ def _risk_indicators(db, campaign: Campaign, analysis) -> list[str]:
         flags.append("Funding target exceeds INR 50,00,000.")
     if not campaign.documents:
         flags.append("No supporting documents were uploaded.")
+    if analysis and _edited_after(db, campaign, analysis):
+        flags.append(
+            "The creator edited the proposal after this analysis ran — the scores "
+            "below describe an earlier version of the text."
+        )
     application = campaign.application
     if application and application.status not in (
         ApplicationStatus.FEE_PAID,
@@ -145,7 +166,6 @@ def review_campaign(public_id: str, admin: AdminUser, db: DbSession) -> AdminCam
             Payment.status == str(PaymentStatus.CAPTURED),
         )
     ).scalars().first()
-    storage = storage_service.get_storage()
     campaigns_created = int(
         db.execute(
             select(func.count(Campaign.id)).where(Campaign.creator_id == creator.id)
@@ -179,17 +199,7 @@ def review_campaign(public_id: str, admin: AdminUser, db: DbSession) -> AdminCam
         sentiment=serializers.sentiment_summary(db, campaign.id),
         risk_indicators=_risk_indicators(db, campaign, analysis),
         recommended_questions=(analysis.questions_for_creator if analysis else []) or [],
-        documents=[
-            DocumentResponse(
-                id=doc.id,
-                file_name=doc.file_name,
-                mime_type=doc.mime_type,
-                size=doc.size,
-                created_at=doc.created_at,
-                url=storage.url_for(doc.storage_key),
-            )
-            for doc in campaign.documents
-        ],
+        documents=[serializers.document_response(doc) for doc in campaign.documents],
         review_notes=campaign.review_notes,
         allowed_actions=allowed,
     )
@@ -518,10 +528,18 @@ def demo_control(
     elif action == "process_refunds":
         target = need_campaign()
         detail = governance_service.process_refunds(db, target, actor_id=admin.id)
-        message = (
-            "Refunds initiated through the payment provider. "
-            "Settlement is handled by payment infrastructure, not the blockchain."
-        )
+        # Built from the counts: "0 refunded" must never read as "refunds initiated".
+        if detail["initiated"]:
+            message = (
+                f"{detail['initiated']} refund(s) initiated through the payment provider. "
+                "Settlement is handled by payment infrastructure, not the blockchain."
+            )
+        elif detail["total"]:
+            message = f"Nothing to do — {detail['total']} refund(s) already in flight or settled."
+        else:
+            message = "No contributions are awaiting a refund on this campaign."
+        if detail["failed"]:
+            message += f" {detail['failed']} failed; see the audit log."
 
     elif action == "analyze_pending_feedback":
         processed = sentiment_service.analyze_pending(db, limit=500)

@@ -234,6 +234,38 @@ export interface CreatorCampaign extends PublicCampaign {
   qr_token: string | null;
   events: CampaignEvent[];
   allowed_transitions: string[];
+  /** Whether the proposal can still be corrected. Decided by the backend. */
+  editable: boolean;
+}
+
+/**
+ * Who may open a supporting document.
+ *
+ * Both tiers are read by the AI analyst — the tier decides which *humans* may
+ * open the file, not whether the model may.
+ */
+export type DocumentVisibility = "SHARED" | "AI_ONLY";
+
+export interface CampaignDocument {
+  id: number;
+  file_name: string;
+  mime_type: string;
+  size: number;
+  created_at: string;
+  visibility: DocumentVisibility;
+  /** Whether the AI could actually read this file. */
+  is_machine_readable: boolean;
+  /** Why it could not be read, or a note about truncation. */
+  extraction_note: string | null;
+  /** Authenticated download route — never a raw storage key. */
+  url: string | null;
+}
+
+export interface SharedDocuments {
+  total: number;
+  ai_only_count: number;
+  requires_sign_in: boolean;
+  documents: CampaignDocument[];
 }
 
 export interface OrderResponse {

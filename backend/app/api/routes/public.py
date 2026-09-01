@@ -16,10 +16,15 @@ from app.core.enums import CampaignCategory, ContributionStatus
 from app.core.errors import NotFoundError
 from app.models.chain import BlockchainTransaction
 from app.models.payment import Contribution
-from app.schemas.campaign import CampaignSummary, PublicCampaign, QRResponse
+from app.schemas.campaign import (
+    CampaignSummary,
+    PublicCampaign,
+    QRResponse,
+    SharedDocuments,
+)
 from app.schemas.common import Page
 from app.schemas.payment import BlockchainRecord, ContributionPublic, FeedbackResponse
-from app.services import campaign_service, feedback_service, qr_service
+from app.services import campaign_service, document_service, feedback_service, qr_service
 
 router = APIRouter(prefix="/api/public", tags=["Public"])
 
@@ -54,6 +59,32 @@ def list_campaigns(
 @router.get("/campaigns/{public_id}", response_model=PublicCampaign)
 def get_campaign(public_id: str, db: DbSession, user: OptionalUser) -> PublicCampaign:
     return serializers.public_campaign(db, campaign_service.get_public(db, public_id))
+
+
+@router.get("/campaigns/{public_id}/documents", response_model=SharedDocuments)
+def campaign_documents(
+    public_id: str, db: DbSession, user: OptionalUser
+) -> SharedDocuments:
+    """Supporting documents a signed-in visitor may open.
+
+    The counts are returned to everyone and the files only to a signed-in
+    reader. A campaign that attached evidence should not read as though it
+    attached none, and a reader deserves to know that the AI was given material
+    they cannot themselves check.
+    """
+    campaign = campaign_service.get_public(db, public_id)
+    shared = document_service.shared_documents(campaign)
+    signed_in = user is not None
+    return SharedDocuments(
+        total=len(shared),
+        ai_only_count=len(campaign.documents) - len(shared),
+        requires_sign_in=bool(shared) and not signed_in,
+        documents=(
+            [serializers.document_response(document) for document in shared]
+            if signed_in
+            else []
+        ),
+    )
 
 
 @router.get("/campaigns/{public_id}/qr.png", response_class=Response)

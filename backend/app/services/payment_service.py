@@ -643,8 +643,13 @@ def _dispatch_webhook(
             select(Payment).where(Payment.razorpay_payment_id == entity.get("payment_id"))
         ).scalars().first()
         if payment:
-            payment.status = PaymentStatus.REFUNDED
-            db.flush()
+            contribution = db.execute(
+                select(Contribution).where(Contribution.payment_id == payment.id)
+            ).scalars().first()
+            # Settles the contribution and closes the campaign too, not just the
+            # payment row: a refund the gateway has completed is not "done" while
+            # the contributor's record still reads as pending.
+            settle_refund(db, payment, contribution)
         return {"status": "processed", "event": event_type, "processed": True}
 
     return {"status": "ignored", "reason": "unhandled_event", "processed": False}
@@ -653,12 +658,33 @@ def _dispatch_webhook(
 # --------------------------------------------------------------------------
 # Refunds — payment infrastructure, never the blockchain
 # --------------------------------------------------------------------------
+# Gateway refund states that mean the money has already gone back. Razorpay
+# reports "processing" and finishes over a webhook; the demo provider completes
+# synchronously and reports "processed".
+_SETTLED_REFUND_STATES = {"processed", "refunded"}
+
+
 def refund_contribution(db: Session, contribution: Contribution) -> RefundResult:
+    """Return one contribution's money. Safe to call more than once.
+
+    The re-entrancy guard is the point of this function. `Payment.status` is the
+    only field that advances the moment a refund is requested, so it — not the
+    contribution's status — is what decides whether a refund is already in
+    flight. Guarding on the contribution instead would be useless: it is set to
+    REFUND_PENDING here, which is exactly what the sweep selects on, so a second
+    pass would re-select the same rows and refund every contributor twice.
+    """
     payment = db.get(Payment, contribution.payment_id)
     if payment is None or not payment.razorpay_payment_id:
         raise ConflictError("This contribution has no captured payment to refund.")
     if payment.status == PaymentStatus.REFUNDED:
         return RefundResult(refund_id="", status="already_refunded", provider=get_provider().name)
+    if payment.status == PaymentStatus.REFUND_INITIATED:
+        # Requested already and waiting on the gateway. Asking again would be a
+        # second real refund.
+        return RefundResult(
+            refund_id="", status="already_in_flight", provider=get_provider().name
+        )
 
     result = get_provider().refund(payment.razorpay_payment_id, Decimal(payment.amount))
     payment.status = PaymentStatus.REFUND_INITIATED
@@ -673,4 +699,58 @@ def refund_contribution(db: Session, contribution: Contribution) -> RefundResult
         entity_id=contribution.id,
         metadata={"refund_id": result.refund_id, "status": result.status},
     )
+
+    # A provider that finished synchronously will never send a webhook, so
+    # waiting for one would strand the refund in REFUND_INITIATED forever.
+    if (result.status or "").lower() in _SETTLED_REFUND_STATES:
+        settle_refund(db, payment, contribution, refund_id=result.refund_id)
     return result
+
+
+def settle_refund(
+    db: Session,
+    payment: Payment,
+    contribution: Contribution | None,
+    *,
+    refund_id: str = "",
+) -> bool:
+    """Mark a refund complete — the one place that happens.
+
+    Idempotent, because it is reached from two directions that can both fire for
+    the same refund: a synchronous provider result and a gateway webhook, which
+    may itself be redelivered. Returns whether this call was the one that
+    settled it.
+    """
+    from app.services import governance_service  # local import avoids a cycle
+
+    already = payment.status == PaymentStatus.REFUNDED and (
+        contribution is None or contribution.status == ContributionStatus.REFUNDED
+    )
+    if already:
+        return False
+
+    payment.status = PaymentStatus.REFUNDED
+    if contribution is not None:
+        contribution.status = ContributionStatus.REFUNDED
+    db.flush()
+
+    audit_service.record_audit(
+        db,
+        action=EventType.REFUND_COMPLETED,
+        actor_id=contribution.contributor_id if contribution else None,
+        entity_type="contribution" if contribution else "payment",
+        entity_id=contribution.id if contribution else payment.id,
+        metadata={"refund_id": refund_id, "amount": str(payment.amount)},
+    )
+    logger.info(
+        "refund_settled",
+        payment_id=payment.id,
+        contribution_id=contribution.id if contribution else None,
+    )
+
+    # The campaign is only finished when every contributor has been made whole.
+    if contribution is not None:
+        campaign = db.get(Campaign, contribution.campaign_id)
+        if campaign is not None:
+            governance_service.close_if_refunds_settled(db, campaign)
+    return True

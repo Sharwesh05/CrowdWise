@@ -15,7 +15,7 @@ Tagline: *Smarter Crowdfunding. Stronger Communities.*
 CrowdWise is **not** "campaign → payment → money raised". It is a full lifecycle:
 
 ```
-Creator → Register → Demo KYC → ₹500 Application Fee → Campaign Submission
+Creator → Register → Demo KYC → Application Fee → Campaign Submission
        → AI Campaign Analysis (NVIDIA NIM) → Admin Review → Approval → LIVE
        → Unique Campaign QR → Physical/Online Discovery → Campaign Page
        → Feedback / Rating → Razorpay Contribution → Server-side Verification
@@ -267,7 +267,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 ### Phase 3 — Campaign lifecycle
 - [x] Campaign state machine
 - [x] Campaign CRUD + application
-- [x] ₹500 application fee order + verification
+- [x] Application fee order + verification
 - [x] AI analysis service (mock + nvidia/gemma) + routes
 - [x] Admin review routes (approve / reject / request-changes)
 

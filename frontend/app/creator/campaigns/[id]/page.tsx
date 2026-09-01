@@ -33,11 +33,13 @@ import {
 import { RequireRole } from "@/components/layout/require-role";
 import { AIAnalysisPanel } from "@/features/campaign/ai-analysis-panel";
 import { BlockchainPanel } from "@/features/campaign/blockchain-panel";
+import { DocumentsPanel } from "@/features/campaign/documents-panel";
+import { EditProposalPanel } from "@/features/campaign/edit-proposal-panel";
 import { CommunityInsightsPanel, FeedbackList, SentimentPanel } from "@/features/campaign/community-panel";
 import { UpdatesPanel } from "@/features/campaign/updates-panel";
 import { FundingChart } from "@/features/campaign/funding-chart";
 import { API_URL, ApiError } from "@/lib/api";
-import { formatCompactCurrency, formatCurrency, formatDateTime, titleCase } from "@/lib/format";
+import { formatCompactCurrency, formatDateTime, titleCase } from "@/lib/format";
 import { CAMPAIGN_STATUS_META, cn, healthTone } from "@/lib/utils";
 import {
   useApplicationFeeOrder,
@@ -152,6 +154,8 @@ function CampaignManager({ campaignId }: { campaignId: number }) {
         className="mt-8"
         tabs={[
           { id: "lifecycle", label: "Lifecycle" },
+          ...(campaign.editable ? [{ id: "edit", label: "Edit proposal" }] : []),
+          { id: "media", label: "Image & documents" },
           { id: "analytics", label: "Analytics" },
           { id: "updates", label: "Updates", count: campaign.update_count },
           { id: "community", label: "Community", count: campaign.sentiment?.feedback_count },
@@ -165,9 +169,17 @@ function CampaignManager({ campaignId }: { campaignId: number }) {
 
       <div className="mt-6">
         {tab === "lifecycle" && <LifecyclePanel campaign={campaign} onChanged={() => refetch()} />}
+        {tab === "edit" && <EditProposalPanel campaign={campaign} />}
+        {tab === "media" && (
+          <DocumentsPanel campaignId={campaign.id} coverImageUrl={campaign.cover_image_url} />
+        )}
         {tab === "analytics" && <AnalyticsPanel publicId={campaign.public_id} />}
         {tab === "updates" && (
-          <UpdatesPanel publicId={campaign.public_id} canPost />
+          <UpdatesPanel
+            publicId={campaign.public_id}
+            canPost
+            published={Boolean(campaign.published_at)}
+          />
         )}
 
         {tab === "community" && (
@@ -266,13 +278,13 @@ function LifecyclePanel({
         ) : null,
     },
     {
-      title: "₹500 application fee",
-      body: "Verified server-side. The application only moves forward once the payment is confirmed.",
+      title: "Application fee",
+      body: "A small fee, verified server-side. The application only moves forward once the payment is confirmed.",
       done: feePaid,
       action:
         campaign.status === "FEE_PENDING" ? (
           <Button size="sm" loading={paying} leadingIcon={<CreditCard className="h-3.5 w-3.5" />} onClick={payFee}>
-            Pay {formatCurrency(campaign.application?.application_fee ?? 500)}
+            Pay application fee
           </Button>
         ) : null,
     },

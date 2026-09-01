@@ -1,7 +1,10 @@
 # Campaign analysis prompt (Gemma)
 
 Loaded by `backend/app/services/ai_service.py`. `{placeholders}` are filled with
-creator-authored proposal fields only — never contributor data, never personal data.
+creator-authored proposal fields and the text of the documents the creator
+attached — never contributor data, never personal data. Both document visibility
+tiers are included: the tier controls which humans may open a file, not whether
+the analyst may read it.
 
 ---
 
@@ -72,3 +75,11 @@ Expected impact:
 
 Full description:
 {description}
+
+Supporting documents attached by the creator:
+{supporting_documents}
+
+Treat the documents as the creator's own claims, not as verified fact — they are
+uploads, not audited records. Where a document backs up a number or a plan in the
+proposal, say so. Where a document is listed as unreadable, note the gap rather
+than assuming either that the evidence is fine or that it is missing.

@@ -13,7 +13,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.core.enums import CampaignCategory, OutcomeType, VotingWeightMode
+from app.core.enums import (
+    CampaignCategory,
+    DocumentVisibility,
+    OutcomeType,
+    VotingWeightMode,
+)
 from app.schemas.common import ORMModel
 
 
@@ -280,6 +285,9 @@ class CreatorCampaign(PublicCampaign):
     qr_token: str | None = None
     events: list[CampaignEventResponse] = Field(default_factory=list)
     allowed_transitions: list[str] = Field(default_factory=list)
+    # Whether the proposal can still be corrected. Served from the backend so the
+    # UI never has to keep its own copy of the rule and drift from it.
+    editable: bool = False
 
 
 class QRResponse(BaseModel):
@@ -288,3 +296,35 @@ class QRResponse(BaseModel):
     qr_token: str | None = None
     qr_image_data_uri: str
     download_url: str
+
+
+class DocumentResponse(ORMModel):
+    id: int
+    file_name: str
+    mime_type: str
+    size: int
+    created_at: datetime
+    visibility: str = DocumentVisibility.AI_ONLY
+    # Whether the AI could actually read this file, and why not when it could
+    # not. A creator who uploads evidence is told plainly whether it reached the
+    # model, rather than being left to assume it did.
+    is_machine_readable: bool = False
+    extraction_note: str | None = None
+    # Points at the authenticated download route, never at a raw storage key.
+    url: str | None = None
+
+
+class SharedDocuments(BaseModel):
+    """The supporting documents a signed-in visitor may open.
+
+    `total` is reported even to a signed-out visitor, and `ai_only_count` to
+    everyone. Saying "three documents are attached, two of which are private to
+    the reviewer and the AI" is honest; silently rendering nothing would let a
+    campaign look less evidenced than it is, and would hide that the model was
+    given material the reader cannot check.
+    """
+
+    total: int
+    ai_only_count: int
+    requires_sign_in: bool
+    documents: list[DocumentResponse] = Field(default_factory=list)

@@ -24,6 +24,7 @@ import type {
   AuthResponse,
   BlockchainRecord,
   CampaignAnalytics,
+  CampaignDocument,
   CampaignSummary,
   CampaignUpdate,
   CommunityInsight,
@@ -31,6 +32,7 @@ import type {
   ContributorDashboard,
   CreatorCampaign,
   CreatorDashboard,
+  DocumentVisibility,
   Feedback,
   Governance,
   KYCStatusResponse,
@@ -43,6 +45,7 @@ import type {
   QRResponse,
   SentimentSummary,
   SessionUser,
+  SharedDocuments,
   VerificationProgress,
   Vote,
   VoteChoice,
@@ -67,6 +70,8 @@ export const keys = {
   myContributions: ["my-contributions"] as const,
   myVotes: ["my-votes"] as const,
   campaignUpdates: (id: string) => ["campaign-updates", id] as const,
+  campaignDocuments: (id: number) => ["campaign-documents", id] as const,
+  publicDocuments: (id: string) => ["public-documents", id] as const,
   profile: ["profile"] as const,
   adminDashboard: ["admin-dashboard"] as const,
   adminPending: ["admin-pending"] as const,
@@ -302,10 +307,16 @@ export function useRefreshSentiment(publicId: string) {
   });
 }
 
-export function useCampaignUpdates(publicId: string) {
+/**
+ * `enabled` is false before a campaign is published: the updates endpoint is the
+ * public one, which does not answer for a campaign that is not public yet. Asking
+ * anyway would turn "not applicable" into a red error on the creator's own page.
+ */
+export function useCampaignUpdates(publicId: string, enabled = true) {
   return useQuery<Page<CampaignUpdate>>({
     queryKey: keys.campaignUpdates(publicId),
     queryFn: () => api.get<Page<CampaignUpdate>>(`/api/campaigns/${publicId}/updates?limit=50`),
+    enabled: enabled && Boolean(publicId),
   });
 }
 
@@ -458,6 +469,20 @@ export function useCreateCampaign() {
   });
 }
 
+/** Correct a proposal that has not yet been acted on by a reviewer. */
+export function useUpdateCampaign(campaignId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) =>
+      api.patch<CreatorCampaign>(`/api/campaigns/${campaignId}`, payload),
+    onSuccess: (data) => {
+      queryClient.setQueryData(keys.campaign(campaignId), data);
+      queryClient.invalidateQueries({ queryKey: keys.myCampaigns });
+      queryClient.invalidateQueries({ queryKey: keys.publicCampaign(data.public_id) });
+    },
+  });
+}
+
 export function useSubmitCampaign() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -494,6 +519,70 @@ export function useCampaignQr(campaignId: number, enabled: boolean) {
     queryKey: keys.qr(campaignId),
     queryFn: () => api.get<QRResponse>(`/api/campaigns/${campaignId}/qr`),
     enabled: enabled && campaignId > 0,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Supporting documents
+// ---------------------------------------------------------------------------
+
+/** Every document on a campaign the caller owns (or administers), both tiers. */
+export function useCampaignDocuments(campaignId: number) {
+  return useQuery<CampaignDocument[]>({
+    queryKey: keys.campaignDocuments(campaignId),
+    queryFn: () => api.get<CampaignDocument[]>(`/api/campaigns/${campaignId}/documents`),
+    enabled: Number.isFinite(campaignId) && campaignId > 0,
+  });
+}
+
+export function useUploadDocument(campaignId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, visibility }: { file: File; visibility: DocumentVisibility }) => {
+      const body = new FormData();
+      body.append("file", file);
+      body.append("visibility", visibility);
+      return api.post<CampaignDocument>(`/api/campaigns/${campaignId}/documents`, body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: keys.campaignDocuments(campaignId) });
+      queryClient.invalidateQueries({ queryKey: keys.campaign(campaignId) });
+    },
+  });
+}
+
+export function useDeleteDocument(campaignId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (documentId: number) =>
+      api.delete<{ message: string }>(`/api/campaigns/${campaignId}/documents/${documentId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: keys.campaignDocuments(campaignId) });
+    },
+  });
+}
+
+export function useUploadCoverImage(campaignId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const body = new FormData();
+      body.append("file", file);
+      return api.post<CreatorCampaign>(`/api/campaigns/${campaignId}/cover-image`, body);
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(keys.campaign(campaignId), data);
+      queryClient.invalidateQueries({ queryKey: keys.myCampaigns });
+    },
+  });
+}
+
+/** The SHARED documents a signed-in visitor may open on a public campaign. */
+export function usePublicDocuments(publicId: string) {
+  return useQuery<SharedDocuments>({
+    queryKey: keys.publicDocuments(publicId),
+    queryFn: () => api.get<SharedDocuments>(`/api/public/campaigns/${publicId}/documents`),
+    enabled: Boolean(publicId),
   });
 }
 

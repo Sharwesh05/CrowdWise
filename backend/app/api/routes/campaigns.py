@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, File, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Response, UploadFile
 
 from app.api import serializers
-from app.core.deps import CSRFProtected, CreatorOrAdmin, DbSession
-from app.core.enums import ApplicationStatus, CampaignStatus, EventType, UserRole
-from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
-from app.schemas.admin import DocumentResponse
+from app.core.deps import CSRFProtected, CreatorOrAdmin, CurrentUser, DbSession
+from app.core.enums import (
+    ApplicationStatus,
+    CampaignStatus,
+    DocumentVisibility,
+    EventType,
+    UserRole,
+)
+from app.core.errors import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from app.schemas.campaign import (
     AIAnalysisResponse,
     CampaignCreateRequest,
     CampaignUpdateRequest,
     CreatorCampaign,
+    DocumentResponse,
     QRResponse,
     SentimentSummary,
 )
@@ -23,6 +34,7 @@ from app.services import (
     ai_service,
     audit_service,
     campaign_service,
+    document_service,
     payment_service,
     qr_service,
     sentiment_service,
@@ -193,58 +205,121 @@ def get_analysis(campaign_id: int, user: CreatorOrAdmin, db: DbSession) -> AIAna
     dependencies=[CSRFProtected],
 )
 async def upload_document(
-    campaign_id: int, user: CreatorOrAdmin, db: DbSession, file: UploadFile = File(...)
+    campaign_id: int,
+    user: CreatorOrAdmin,
+    db: DbSession,
+    file: UploadFile = File(...),
+    visibility: str = Form(default=str(DocumentVisibility.AI_ONLY)),
 ) -> DocumentResponse:
-    from app.models.campaign import CampaignDocument
+    """Attach a supporting document.
 
+    `visibility` is SHARED (any signed-in user can open it once the campaign is
+    public) or AI_ONLY (the creator, a reviewing admin and the AI). It defaults
+    to AI_ONLY: a creator who does not choose has not agreed to publish.
+    """
     campaign = _owned(db, campaign_id, user)
     content = await file.read()
-    stored = storage_service.store_upload(
-        file.filename or "document", content, file.content_type, prefix=f"campaigns/{campaign.public_id}"
-    )
-    document = CampaignDocument(
-        campaign_id=campaign.id,
-        file_name=stored.original_name,
-        storage_key=stored.storage_key,
-        mime_type=stored.mime_type,
-        size=stored.size,
-    )
-    db.add(document)
-    db.flush()
-    audit_service.record_event(
+    document = document_service.upload(
         db,
-        campaign_id=campaign.id,
-        event_type=EventType.DOCUMENT_UPLOADED,
-        actor_id=user.id,
-        metadata={"document_id": document.id, "mime_type": stored.mime_type},
+        campaign,
+        user,
+        filename=file.filename or "document",
+        content=content,
+        declared_mime=file.content_type,
+        visibility=document_service.parse_visibility(visibility),
     )
     db.commit()
     db.refresh(document)
-    return DocumentResponse(
-        id=document.id,
-        file_name=document.file_name,
-        mime_type=document.mime_type,
-        size=document.size,
-        created_at=document.created_at,
-        url=stored.url,
-    )
+    return serializers.document_response(document)
 
 
 @router.get("/{campaign_id}/documents", response_model=list[DocumentResponse])
 def list_documents(campaign_id: int, user: CreatorOrAdmin, db: DbSession) -> list[DocumentResponse]:
     campaign = _owned(db, campaign_id, user)
-    storage = storage_service.get_storage()
-    return [
-        DocumentResponse(
-            id=document.id,
-            file_name=document.file_name,
-            mime_type=document.mime_type,
-            size=document.size,
-            created_at=document.created_at,
-            url=storage.url_for(document.storage_key),
-        )
-        for document in campaign.documents
-    ]
+    return [serializers.document_response(document) for document in campaign.documents]
+
+
+@router.delete(
+    "/{campaign_id}/documents/{document_id}",
+    response_model=MessageResponse,
+    dependencies=[CSRFProtected],
+)
+def delete_document(
+    campaign_id: int, document_id: int, user: CreatorOrAdmin, db: DbSession
+) -> MessageResponse:
+    campaign = _owned(db, campaign_id, user)
+    document = next((d for d in campaign.documents if d.id == document_id), None)
+    if document is None:
+        raise NotFoundError("Document not found.")
+    document_service.delete(db, document)
+    db.commit()
+    return MessageResponse(message="Document removed.")
+
+
+@router.get("/{campaign_id}/documents/{document_id}/download")
+def download_document(
+    campaign_id: int, document_id: int, user: CurrentUser, db: DbSession
+) -> Response:
+    """Serve a document's bytes to a reader entitled to them.
+
+    Documents never travel as raw storage URLs. `/api/files` is unauthenticated,
+    so handing one out would turn a file the creator marked private into a
+    permanent public link for anyone who saw the key once.
+    """
+    _campaign, document = document_service.get_for_reader(db, campaign_id, document_id, user)
+    return Response(
+        content=document_service.read_bytes(document),
+        media_type=document.mime_type,
+        headers={
+            # Private to this reader: never cached by a shared proxy.
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'inline; filename="{_ascii_filename(document.file_name)}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src \'none\'; sandbox",
+        },
+    )
+
+
+def _ascii_filename(name: str) -> str:
+    """A Content-Disposition-safe rendering of a user-supplied filename."""
+    cleaned = "".join(ch for ch in name if ch.isprintable() and ch not in '"\\')
+    return cleaned.encode("ascii", "ignore").decode() or "document"
+
+
+@router.post(
+    "/{campaign_id}/cover-image",
+    response_model=CreatorCampaign,
+    dependencies=[CSRFProtected],
+)
+async def upload_cover_image(
+    campaign_id: int, user: CreatorOrAdmin, db: DbSession, file: UploadFile = File(...)
+) -> CreatorCampaign:
+    """Replace the campaign's cover image with an uploaded one.
+
+    Stored under `covers/`, not `campaigns/`: a cover is meant to be public, and
+    keeping the two prefixes apart is what lets the unauthenticated file route
+    serve one while refusing the other.
+    """
+    campaign = _owned(db, campaign_id, user)
+    content = await file.read()
+    mime = storage_service.validate_upload(file.filename or "cover", content, file.content_type)
+    if not mime.startswith("image/"):
+        raise ValidationError("A cover image must be a JPEG, PNG or WebP image.")
+    stored = storage_service.store_upload(
+        file.filename or "cover", content, file.content_type, prefix="covers"
+    )
+    campaign.cover_image_url = stored.url
+    db.flush()
+    audit_service.record_event(
+        db,
+        campaign_id=campaign.id,
+        event_type=EventType.CAMPAIGN_UPDATED,
+        actor_id=user.id,
+        metadata={"cover_image": stored.storage_key},
+    )
+    db.commit()
+    db.refresh(campaign)
+    return serializers.creator_campaign(db, campaign)
 
 
 # --------------------------------------------------------------------------

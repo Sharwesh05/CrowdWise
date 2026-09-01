@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     # ---------- Governance defaults ----------
     governance_duration_hours: int = 72
     governance_extension_days: int = 30
+    # Whether the worker executes a refund the moment an outcome orders one, or
+    # leaves it for an operator to trigger. Off means REFUND_PENDING campaigns
+    # sit until someone acts — safe, but nobody gets their money back on its own.
+    auto_process_refunds: bool = True
 
     @field_validator("cors_origins")
     @classmethod

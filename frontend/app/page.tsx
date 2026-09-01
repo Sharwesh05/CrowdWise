@@ -18,7 +18,7 @@ const PILLARS = [
   {
     icon: BadgeCheck,
     title: "Verified creators",
-    body: "Every creator completes identity verification and pays a ₹500 application fee before a campaign can be reviewed. No anonymous asks.",
+    body: "Every creator completes identity verification and pays a small application fee before a campaign can be reviewed. No anonymous asks.",
   },
   {
     icon: Brain,
@@ -51,7 +51,7 @@ const STEPS = [
   {
     step: "01",
     title: "Creators get verified",
-    body: "Identity verification, a ₹500 application fee, and a written proposal — problem, solution, budget and impact.",
+    body: "Identity verification, a small application fee, and a written proposal — problem, solution, budget and impact.",
   },
   {
     step: "02",

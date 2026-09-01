@@ -327,3 +327,112 @@ def test_contribution_belongs_to_its_owner(contributor, second_contributor, live
 
     assert second_contributor.get(f"/api/contributions/{contribution.id}").status_code == 403
     assert second_contributor.post(f"/api/payments/{order['payment_id']}/simulate").status_code == 403
+
+
+# --------------------------------------------------------------------------
+# Refund settlement over the webhook (the asynchronous, Razorpay-shaped path)
+# --------------------------------------------------------------------------
+def _refund_event(payment_id: str, event_id: str) -> dict:
+    return {
+        "id": event_id,
+        "event": "refund.processed",
+        "payload": {
+            "refund": {
+                "entity": {"id": f"rfnd_{event_id}", "payment_id": payment_id, "status": "processed"}
+            }
+        },
+    }
+
+
+def test_refund_webhook_settles_the_contribution_and_closes_the_campaign(
+    client, contributor, live_campaign, db, monkeypatch
+):
+    """A gateway that finishes asynchronously must still close the loop.
+
+    Before this, the webhook advanced only `Payment.status`: the contributor's
+    own record stayed REFUND_PENDING for good and the campaign never closed.
+    """
+    from app.core.enums import CampaignStatus, ContributionStatus, PaymentStatus
+    from app.services import governance_service
+
+    order = make_order(contributor, live_campaign["public_id"])
+    contributor.post(f"/api/payments/{order['payment_id']}/simulate")
+
+    campaign = db.get(Campaign, live_campaign["id"])
+    contribution = db.execute(select(Contribution)).scalars().one()
+    payment = db.get(Payment, contribution.payment_id)
+    gateway_payment_id = payment.razorpay_payment_id
+
+    # Force the asynchronous provider answer so settlement can only arrive by webhook.
+    provider = payment_service.get_provider()
+    monkeypatch.setattr(
+        provider,
+        "refund",
+        lambda pid, amount=None: payment_service.RefundResult(
+            refund_id="rfnd_async", status="processing", provider=provider.name
+        ),
+    )
+
+    campaign.status = str(CampaignStatus.REFUND_PENDING)
+    governance_service.mark_contributions_refund_pending(db, campaign)
+    db.commit()
+    governance_service.process_refunds(db, campaign)
+    db.commit()
+
+    db.expire_all()
+    assert db.get(Payment, payment.id).status == str(PaymentStatus.REFUND_INITIATED)
+    assert db.get(Campaign, campaign.id).status == str(CampaignStatus.REFUND_PENDING)
+
+    status, _ = _webhook(client, _refund_event(gateway_payment_id, "evt_refund_1"))
+    assert status == 200
+
+    db.expire_all()
+    assert db.get(Payment, payment.id).status == str(PaymentStatus.REFUNDED)
+    assert db.get(Contribution, contribution.id).status == str(ContributionStatus.REFUNDED)
+    assert db.get(Campaign, campaign.id).status == str(CampaignStatus.CLOSED)
+
+
+def test_replayed_refund_webhook_changes_nothing(
+    client, contributor, live_campaign, db, monkeypatch
+):
+    from app.core.enums import CampaignStatus, EventType
+    from app.models.campaign import CampaignEvent
+    from app.services import governance_service
+
+    order = make_order(contributor, live_campaign["public_id"])
+    contributor.post(f"/api/payments/{order['payment_id']}/simulate")
+
+    campaign = db.get(Campaign, live_campaign["id"])
+    contribution = db.execute(select(Contribution)).scalars().one()
+    gateway_payment_id = db.get(Payment, contribution.payment_id).razorpay_payment_id
+
+    provider = payment_service.get_provider()
+    monkeypatch.setattr(
+        provider,
+        "refund",
+        lambda pid, amount=None: payment_service.RefundResult(
+            refund_id="rfnd_async", status="processing", provider=provider.name
+        ),
+    )
+    campaign.status = str(CampaignStatus.REFUND_PENDING)
+    governance_service.mark_contributions_refund_pending(db, campaign)
+    db.commit()
+    governance_service.process_refunds(db, campaign)
+    db.commit()
+
+    # Two deliveries of the same refund, distinct event ids so neither is caught
+    # by the WebhookEvent dedupe — the settlement itself must be idempotent.
+    _webhook(client, _refund_event(gateway_payment_id, "evt_refund_a"))
+    _webhook(client, _refund_event(gateway_payment_id, "evt_refund_b"))
+
+    db.expire_all()
+    completions = (
+        db.query(CampaignEvent)
+        .filter(
+            CampaignEvent.campaign_id == campaign.id,
+            CampaignEvent.event_type == str(EventType.REFUND_COMPLETED),
+        )
+        .count()
+    )
+    assert completions == 1, "a redelivered webhook must not re-settle the refund"
+    assert db.get(Campaign, campaign.id).status == str(CampaignStatus.CLOSED)

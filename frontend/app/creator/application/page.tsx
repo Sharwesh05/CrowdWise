@@ -15,7 +15,6 @@ import {
   Skeleton,
 } from "@/components/ui";
 import { RequireRole } from "@/components/layout/require-role";
-import { formatCurrency } from "@/lib/format";
 import { CAMPAIGN_STATUS_META } from "@/lib/utils";
 import { useKycStatus, useMyCampaigns } from "@/hooks";
 
@@ -95,9 +94,7 @@ function ApplicationStatus() {
                       <dt className="text-xs text-ink-faint">Application fee</dt>
                       <dd className="mt-0.5 font-medium text-ink">
                         {campaign.application
-                          ? `${formatCurrency(campaign.application.application_fee)} · ${campaign.application.status
-                              .replace(/_/g, " ")
-                              .toLowerCase()}`
+                          ? campaign.application.status.replace(/_/g, " ").toLowerCase()
                           : "—"}
                       </dd>
                     </div>

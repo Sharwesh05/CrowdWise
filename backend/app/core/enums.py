@@ -137,6 +137,20 @@ ASPECT_LABELS: dict[str, str] = {
 }
 
 
+class DocumentVisibility(StrEnum):
+    """Who may read a supporting document.
+
+    Both tiers are given to the AI analyst — the distinction is only about human
+    readers. AI_ONLY exists so a creator can hand the model the evidence behind a
+    claim (a quote, a bank letter, a medical note) without publishing it to every
+    signed-in visitor. The reviewing admin still sees it: they carry the approval
+    decision and cannot be asked to sign off on evidence they may not read.
+    """
+
+    SHARED = "SHARED"      # any signed-in user can open it
+    AI_ONLY = "AI_ONLY"    # creator, reviewing admin and the model only
+
+
 class AnalysisType(StrEnum):
     CAMPAIGN = "CAMPAIGN"
     COMMUNITY = "COMMUNITY"

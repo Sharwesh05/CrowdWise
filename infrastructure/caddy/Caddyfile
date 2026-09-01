@@ -8,12 +8,12 @@
 # Serving both from one origin also removes the CORS problem: the browser sees
 # same-origin requests, so no Access-Control headers are needed.
 #
-# Note the frontend is still configured with an ABSOLUTE api url. It does not
-# call relative paths: frontend/lib/api.ts falls back to http://localhost:8000
-# whenever NEXT_PUBLIC_API_URL is empty, because it tests with `||` (falsy)
-# rather than `??` (nullish). So NEXT_PUBLIC_API_URL must name this origin, and
-# because it is baked in at image build time, changing it needs a frontend
-# rebuild rather than a restart.
+# The frontend calls RELATIVE paths behind this proxy. frontend/lib/api.ts leaves
+# the API base empty whenever the page is served on anything other than :3000, so
+# /api/* resolves against whatever origin the page was opened on — https://localhost
+# and https://<lan-ip> both work from the same image, and a changed LAN address
+# needs no rebuild. Setting NEXT_PUBLIC_API_URL pins an absolute origin instead and
+# gives up that property, since it is baked in at image build time.
 #
 # The certificate is an explicit self-signed pair with the LAN IP in its SAN,
 # not Caddy's managed `tls internal`. Managed certificates are selected by SNI,

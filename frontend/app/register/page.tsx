@@ -164,7 +164,7 @@ function RegisterForm() {
 
       {role === "CREATOR" && (
         <p className="text-xs leading-relaxed text-ink-muted">
-          Next you will complete identity verification and pay the ₹500 application fee before
+          Next you will complete identity verification and pay a small application fee before
           your campaign can be reviewed.
         </p>
       )}

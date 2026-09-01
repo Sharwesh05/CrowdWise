@@ -21,6 +21,8 @@ import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -30,7 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.db import session_scope, utcnow
+from app.core.db import advisory_lock, session_scope, utcnow
 from app.core.enums import (
     BlockchainRecordType,
     BlockchainTxStatus,
@@ -50,6 +52,11 @@ from app.services import audit_service
 logger = get_logger(__name__)
 
 MAX_ATTEMPTS = 5
+
+# One private key means one nonce sequence, so only one sweeper may hold the
+# wire at a time. Arbitrary but fixed: the key for the Postgres advisory lock
+# that serialises anchoring across processes.
+ANCHOR_LOCK_KEY = 0x43575F414E4348 % (2**63)
 
 CONTRACT_ABI: list[dict[str, Any]] = [
     {
@@ -434,7 +441,15 @@ def _persist(
 # --------------------------------------------------------------------------
 # Operations
 # --------------------------------------------------------------------------
-def register_campaign(db: Session, campaign: Campaign) -> BlockchainTransaction | None:
+def _anchor_campaign(
+    db: Session, campaign: Campaign
+) -> tuple[bool, BlockchainTransaction | None]:
+    """Put the campaign reference on chain.
+
+    Returns `(anchored, record)`. `anchored` says the registry now knows the
+    reference — true both for a fresh registration and for one that was already
+    there; `record` is set only when this call actually wrote a transaction.
+    """
     ref = campaign_ref(campaign.public_id)
     try:
         receipt = get_provider().register_campaign(
@@ -452,9 +467,9 @@ def register_campaign(db: Session, campaign: Campaign) -> BlockchainTransaction 
                 campaign_ref=ref,
                 note="Chain retains state across a database reset; nothing to do.",
             )
-            return None
+            return True, None
         logger.error("chain_register_failed", campaign_id=campaign.id, error=str(exc))
-        return None
+        return False, None
     record = _persist(
         db,
         campaign_id=campaign.id,
@@ -468,7 +483,101 @@ def register_campaign(db: Session, campaign: Campaign) -> BlockchainTransaction 
         event_type=EventType.BLOCKCHAIN_CONTRIBUTION_RECORDED,
         metadata={"tx_hash": receipt.tx_hash, "record_type": "CAMPAIGN_REGISTERED"},
     )
-    return record
+    return True, record
+
+
+def register_campaign(db: Session, campaign: Campaign) -> BlockchainTransaction | None:
+    return _anchor_campaign(db, campaign)[1]
+
+
+def ensure_campaign_registered(db: Session, campaign: Campaign) -> bool:
+    """Re-anchor a campaign the registry has forgotten.
+
+    A campaign is registered once, when it is published. A local chain, though,
+    is disposable: restarting the node wipes its storage and redeploys the
+    registry to the same deterministic address, so `CONTRACT_ADDRESS` still
+    resolves while every campaign published against the previous instance has
+    silently ceased to exist. Every later contribution then reverts with
+    `CampaignUnknown`, which is not something an operator should have to notice
+    and repair by hand.
+    """
+    anchored, record = _anchor_campaign(db, campaign)
+    if anchored and record is not None:
+        logger.info(
+            "chain_campaign_reregistered",
+            campaign_id=campaign.id,
+            campaign_ref=campaign_ref(campaign.public_id),
+            tx_hash=record.tx_hash,
+            note="Registry did not know this campaign; re-anchored before retrying.",
+        )
+    return anchored
+
+
+def ensure_voting_open(db: Session, campaign: Campaign) -> bool:
+    """Replay `openVoting` for a campaign the registry has forgotten.
+
+    Only meaningful after a re-registration: a freshly re-anchored campaign is
+    registered but not yet in voting, so a vote cast against it would revert
+    with `VotingNotOpen` even though governance is genuinely open in Postgres.
+    """
+    if campaign.governance_closes_at is None:
+        return False
+    try:
+        get_provider().open_voting(
+            campaign_ref(campaign.public_id), int(campaign.governance_closes_at.timestamp())
+        )
+    except Exception as exc:
+        return "VotingAlreadyOpen" in str(exc)
+    return True
+
+
+def _replay_chain_context(
+    db: Session, campaign: Campaign, exc: Exception, *, voting: bool = False
+) -> bool:
+    """Rebuild the chain state a restarted local node lost.
+
+    A campaign is registered once, at publication, and voting is opened once, at
+    the start of governance. Neither is ever replayed — which is correct against
+    a durable chain and wrong against a disposable one, where the node comes
+    back with the same contract address and none of the history. Rather than
+    leave every later write reverting, treat exactly the two errors that say
+    "the chain has forgotten" as a cue to re-establish the precondition.
+
+    Returns True when something was repaired and the write is worth retrying.
+    """
+    message = str(exc)
+    unknown = "CampaignUnknown" in message
+    if unknown and not ensure_campaign_registered(db, campaign):
+        return False
+    if voting and (unknown or "VotingNotOpen" in message):
+        return ensure_voting_open(db, campaign)
+    return unknown
+
+
+def _fail_contribution(
+    db: Session, contribution: Contribution, campaign: Campaign, exc: Exception
+) -> None:
+    """Park a contribution that could not be anchored. The payment stands."""
+    contribution.status = ContributionStatus.BLOCKCHAIN_FAILED
+    contribution.blockchain_error = str(exc)[:500]
+    db.flush()
+    logger.error(
+        "chain_contribution_failed",
+        contribution_id=contribution.id,
+        attempts=contribution.blockchain_attempts,
+        error=str(exc),
+    )
+    audit_service.record_event(
+        db,
+        campaign_id=campaign.id,
+        event_type=EventType.BLOCKCHAIN_RECORD_FAILED,
+        metadata={
+            "contribution_id": contribution.id,
+            "attempts": contribution.blockchain_attempts,
+            "note": "Payment remains verified; anchoring will be retried.",
+        },
+    )
+    return None
 
 
 def record_contribution_on_chain(db: Session, contribution: Contribution) -> BlockchainTransaction | None:
@@ -486,36 +595,26 @@ def record_contribution_on_chain(db: Session, contribution: Contribution) -> Blo
     )
     ref = campaign_ref(campaign.public_id)
     payment_hash = payment_ref_hash(reference)
+    amount_paise = int(Decimal(contribution.amount) * 100)
+    wallet = contribution.contributor.wallet_address or ""
     contribution.blockchain_attempts = (contribution.blockchain_attempts or 0) + 1
 
+    def send() -> ChainReceipt:
+        return get_provider().record_contribution(ref, payment_hash, amount_paise, wallet)
+
     try:
-        receipt = get_provider().record_contribution(
-            ref,
-            payment_hash,
-            int(Decimal(contribution.amount) * 100),
-            contribution.contributor.wallet_address or "",
-        )
+        receipt = send()
     except Exception as exc:
-        contribution.status = ContributionStatus.BLOCKCHAIN_FAILED
-        contribution.blockchain_error = str(exc)[:500]
-        db.flush()
-        logger.error(
-            "chain_contribution_failed",
-            contribution_id=contribution.id,
-            attempts=contribution.blockchain_attempts,
-            error=str(exc),
-        )
-        audit_service.record_event(
-            db,
-            campaign_id=campaign.id,
-            event_type=EventType.BLOCKCHAIN_RECORD_FAILED,
-            metadata={
-                "contribution_id": contribution.id,
-                "attempts": contribution.blockchain_attempts,
-                "note": "Payment remains verified; anchoring will be retried.",
-            },
-        )
-        return None
+        # The registry not knowing the campaign is recoverable and says nothing
+        # about this contribution: re-anchor the campaign and try once more,
+        # rather than burning the attempt budget on every contribution until an
+        # admin intervenes.
+        if not _replay_chain_context(db, campaign, exc):
+            return _fail_contribution(db, contribution, campaign, exc)
+        try:
+            receipt = send()
+        except Exception as retry_exc:
+            return _fail_contribution(db, contribution, campaign, retry_exc)
 
     record = _persist(
         db,
@@ -556,15 +655,27 @@ def record_vote_on_chain(db: Session, vote: Vote) -> BlockchainTransaction | Non
         return None
     ref = campaign_ref(campaign.public_id)
     voter = voter_ref(campaign.public_id, vote.contributor_id)
-    try:
-        receipt = get_provider().record_vote(
+
+    def send() -> ChainReceipt:
+        return get_provider().record_vote(
             ref, voter, _CHOICE_CODES.get(vote.choice, 0), int(Decimal(vote.weight) * 100)
         )
-    except Exception as exc:
+
+    def failed(exc: Exception) -> None:
         vote.blockchain_status = str(BlockchainTxStatus.FAILED)
         db.flush()
         logger.error("chain_vote_failed", vote_id=vote.id, error=str(exc))
         return None
+
+    try:
+        receipt = send()
+    except Exception as exc:
+        if not _replay_chain_context(db, campaign, exc, voting=True):
+            return failed(exc)
+        try:
+            receipt = send()
+        except Exception as retry_exc:
+            return failed(retry_exc)
 
     record = _persist(
         db,
@@ -605,11 +716,22 @@ def open_voting_on_chain(
 
 
 def close_voting_on_chain(db: Session, campaign: Campaign) -> BlockchainTransaction | None:
+    def send() -> ChainReceipt:
+        return get_provider().close_voting(campaign_ref(campaign.public_id))
+
     try:
-        receipt = get_provider().close_voting(campaign_ref(campaign.public_id))
+        receipt = send()
     except Exception as exc:
-        logger.error("chain_close_voting_failed", campaign_id=campaign.id, error=str(exc))
-        return None
+        if not _replay_chain_context(db, campaign, exc, voting=True):
+            logger.error("chain_close_voting_failed", campaign_id=campaign.id, error=str(exc))
+            return None
+        try:
+            receipt = send()
+        except Exception as retry_exc:
+            logger.error(
+                "chain_close_voting_failed", campaign_id=campaign.id, error=str(retry_exc)
+            )
+            return None
     return _persist(
         db,
         campaign_id=campaign.id,
@@ -621,13 +743,22 @@ def close_voting_on_chain(db: Session, campaign: Campaign) -> BlockchainTransact
 def record_outcome_on_chain(
     db: Session, campaign: Campaign, outcome: str
 ) -> BlockchainTransaction | None:
-    try:
-        receipt = get_provider().record_outcome(
+    def send() -> ChainReceipt:
+        return get_provider().record_outcome(
             campaign_ref(campaign.public_id), _CHOICE_CODES.get(outcome, 0)
         )
+
+    try:
+        receipt = send()
     except Exception as exc:
-        logger.error("chain_outcome_failed", campaign_id=campaign.id, error=str(exc))
-        return None
+        if not _replay_chain_context(db, campaign, exc, voting=True):
+            logger.error("chain_outcome_failed", campaign_id=campaign.id, error=str(exc))
+            return None
+        try:
+            receipt = send()
+        except Exception as retry_exc:
+            logger.error("chain_outcome_failed", campaign_id=campaign.id, error=str(retry_exc))
+            return None
     record = _persist(
         db,
         campaign_id=campaign.id,
@@ -666,16 +797,33 @@ def pending_contributions(db: Session, limit: int = 50) -> list[Contribution]:
     return list(db.execute(stmt).scalars().all())
 
 
+@contextmanager
+def anchor_lock() -> Iterator[bool]:
+    """Hold the right to write to the chain, across processes.
+
+    Every anchor is signed by the one `BLOCKCHAIN_PRIVATE_KEY`, so there is a
+    single nonce sequence to share. The API sweeps after each captured payment
+    and the worker container sweeps on its own timer; two of those overlapping
+    means one transaction is rejected with "nonce too low" and a contribution
+    spends an attempt on a collision that had nothing to do with it. The
+    in-process `threading.Lock` around `_send` cannot see another process, so
+    the coordination point has to be the database.
+    """
+    with advisory_lock(ANCHOR_LOCK_KEY) as acquired:
+        yield acquired
+
+
 def sync_pending_contributions(db: Session, limit: int = 50) -> int:
-    recorded = 0
-    for contribution in pending_contributions(db, limit):
-        if record_contribution_on_chain(db, contribution):
-            recorded += 1
-    if recorded:
+    with anchor_lock() as acquired:
+        if not acquired:
+            logger.debug("chain_sync_skipped", reason="another sweeper holds the lock")
+            return 0
+        recorded = 0
+        for contribution in pending_contributions(db, limit):
+            if record_contribution_on_chain(db, contribution):
+                recorded += 1
         db.commit()
-    else:
-        db.commit()
-    return recorded
+        return recorded
 
 
 def sync_pending_contributions_task() -> int:

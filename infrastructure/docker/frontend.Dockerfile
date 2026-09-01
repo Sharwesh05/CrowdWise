@@ -10,7 +10,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ ./
 
 # NEXT_PUBLIC_* values are inlined at build time, so they must be present here.
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+# NEXT_PUBLIC_API_URL defaults to empty: lib/api.ts then resolves the API from
+# the address the page is opened on, which keeps one image valid on localhost,
+# on the LAN address and behind the HTTPS proxy.
+ARG NEXT_PUBLIC_API_URL=
 ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
 ARG NEXT_PUBLIC_DEMO_MODE=true
 ARG NEXT_PUBLIC_RAZORPAY_KEY_ID=

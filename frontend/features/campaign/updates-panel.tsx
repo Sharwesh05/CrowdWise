@@ -34,12 +34,38 @@ const BODY_MIN = 20;
 export function UpdatesPanel({
   publicId,
   canPost = false,
+  published = true,
 }: {
   publicId: string;
   /** True for the campaign's own creator and for admins. */
   canPost?: boolean;
+  /** False before the campaign goes live, when there is nothing to fetch yet. */
+  published?: boolean;
 }) {
-  const { data, isLoading, isError, refetch } = useCampaignUpdates(publicId);
+  // Updates cannot be read or written before publication, so an unpublished
+  // campaign does not ask: the creator gets an explanation of when this opens,
+  // not a failed request dressed up as an error.
+  const { data, isLoading, isError, refetch } = useCampaignUpdates(publicId, published);
+
+  if (!published) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Megaphone className="h-4 w-4 text-accent-600" aria-hidden />
+            Updates
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EmptyState
+            icon={<Megaphone className="h-6 w-6" />}
+            title="Updates open when your campaign goes live"
+            description="Once a reviewer approves the campaign you can post progress here, and your backers will see it on the campaign page."
+          />
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
